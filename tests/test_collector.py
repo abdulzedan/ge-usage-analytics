@@ -5,11 +5,6 @@ import datetime as dt
 import collector
 
 
-# ---------------------------------------------------------------------------
-# time helpers
-# ---------------------------------------------------------------------------
-
-
 def test_parse_rfc3339_handles_a_plain_timestamp():
     parsed = collector.parse_rfc3339("2026-07-01T09:30:00Z")
     assert parsed == dt.datetime(2026, 7, 1, 9, 30, tzinfo=dt.timezone.utc)
