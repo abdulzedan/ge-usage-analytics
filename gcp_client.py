@@ -19,7 +19,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 LOGGING_ENDPOINT = "https://logging.googleapis.com/v2/entries:list"
 TRACE_ENDPOINT = "https://cloudtrace.googleapis.com/v1/projects/{project}/traces"

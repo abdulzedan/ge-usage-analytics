@@ -16,7 +16,8 @@ retention window.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS turns (
