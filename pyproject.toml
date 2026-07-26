@@ -1,0 +1,43 @@
+[project]
+name = "ge-usage-analytics"
+version = "1.0.0"
+description = "Export Gemini Enterprise token and activity telemetry out of Google Cloud into a local SQLite database and an offline HTML dashboard."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["gemini-enterprise", "cloud-logging", "cloud-trace", "telemetry", "analytics", "sqlite"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
+]
+
+# The tool itself has no runtime dependencies. It is written against the
+# standard library so it can be copied onto a locked-down host and run as-is.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = [
+    "E501",  # long lines are tolerated in the embedded HTML/CSS template
+    "UP006", # keep typing compatible with 3.9 at runtime
+    "UP007",
+    "UP045",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"dashboard.py" = ["W605"]
