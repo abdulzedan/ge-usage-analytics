@@ -272,13 +272,13 @@ _TEMPLATE = r"""<!doctype html>
   <footer class="note">
     <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user identity, prompt)
     joined on trace id to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts).
-    No BigQuery involved. Times are UTC.</p>
+    Times are UTC.</p>
     <p><strong>On attribution.</strong> Gemini Enterprise stamps its trace id on the
     <code>StreamAssist</code> log entry, so core-assistant turns carry a named user. A turn routed
     to a custom agent (ADK on Agent Engine, or A2A on Cloud Run) executes under that agent's own
     trace id, so its tokens appear under the <em>Agent Engine</em> surface with no end user attached.
-    Filter by surface to see each population on its own. This split is platform behaviour — a
-    BigQuery-based pipeline over the same two sources reports exactly the same numbers.</p>
+    Filter by surface to see each population on its own. This split is platform behaviour, not an
+    artefact of how the numbers were collected.</p>
   </footer>
 </div>
 
@@ -473,7 +473,7 @@ function drawDaily(rows) {
     }
   });
 
-  // Direct-label the final column only — selective, never a number on every mark.
+  // Direct-label the final column only: selective, never a number on every mark.
   const last = data[data.length - 1];
   const lastTotal = last.input + last.output;
   if (lastTotal > 0) {
@@ -853,7 +853,7 @@ def render_dashboard(
     subtitle = (
         f"Project {project} · {len(rows):,} model calls · {turn_count:,} logged turns · {span}"
         f"{' · generated ' + generated_at if generated_at else ''}"
-        " · Cloud Logging + Cloud Trace only, no BigQuery"
+        " · Cloud Logging + Cloud Trace"
     )
 
     meta = {"maxTime": max_time, "minTime": min_time, "project": project}

@@ -117,7 +117,7 @@ def test_subtitle_reports_the_project_and_volume(conn):
     assert "1 model calls" in html
     assert "1 logged turns" in html
     assert "generated 2026-07-01 12:00 UTC" in html
-    assert "no BigQuery" in html
+    assert "Cloud Logging + Cloud Trace" in html
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
