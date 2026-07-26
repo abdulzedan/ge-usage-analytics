@@ -72,6 +72,16 @@ TOOLS = [
 ]
 
 
+# Relative likelihood that a turn lands in each UTC hour.
+HOUR_WEIGHT = {
+    **dict.fromkeys(range(0, 7), 0.05),
+    **dict.fromkeys(range(7, 10), 0.9),
+    **dict.fromkeys(range(10, 17), 1.0),
+    **dict.fromkeys(range(17, 20), 0.5),
+    **dict.fromkeys(range(20, 24), 0.1),
+}
+
+
 def _weighted(rng: random.Random, options: list[tuple]) -> tuple:
     return rng.choices(options, weights=[o[-1] for o in options], k=1)[0]
 
@@ -85,14 +95,7 @@ def _turn_time(rng: random.Random, end: dt.datetime, days: int) -> dt.datetime:
         )
         if moment.weekday() >= 5 and rng.random() < 0.85:
             continue  # weekends are quiet, but not empty
-        hour_weight = {
-            **{h: 0.05 for h in range(0, 7)},
-            **{h: 0.9 for h in range(7, 10)},
-            **{h: 1.0 for h in range(10, 17)},
-            **{h: 0.5 for h in range(17, 20)},
-            **{h: 0.1 for h in range(20, 24)},
-        }[moment.hour]
-        if rng.random() <= hour_weight:
+        if rng.random() <= HOUR_WEIGHT[moment.hour]:
             return moment
 
 
