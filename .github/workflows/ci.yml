@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check --output-format=github .
+      - name: Reject accidentally committed telemetry
+        run: |
+          # usage.db and a rendered dashboard both contain real user
+          # identities and prompt text. Neither belongs in the repository.
+          if git ls-files --error-unmatch usage.db dashboard.html 2>/dev/null; then
+            echo "::error::collected telemetry is tracked in git"
+            exit 1
+          fi
+          echo "no telemetry tracked"
+
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest
+      - run: pytest -q
+
+  end-to-end:
+    name: end-to-end (no Google Cloud)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build a synthetic database
+        run: python tools/make_demo_db.py --out demo.db
+
+      - name: The generator is deterministic
+        run: |
+          python tools/make_demo_db.py --out repeat.db
+          a=$(sha256sum demo.db   | cut -d' ' -f1)
+          b=$(sha256sum repeat.db | cut -d' ' -f1)
+          test "$a" = "$b" || { echo "::error::demo data is not reproducible"; exit 1; }
+          echo "identical: $a"
+
+      - name: Summarise
+        run: python ge_usage.py --db demo.db stats
+
+      - name: Query
+        run: |
+          python ge_usage.py --db demo.db query \
+            "SELECT surface, COUNT(*) calls, SUM(total_tokens) tokens
+             FROM usage GROUP BY 1 ORDER BY tokens DESC"
+          python ge_usage.py --db demo.db query \
+            "SELECT * FROM usage_by_user" --format csv | head -3
+
+      - name: Render the dashboard
+        run: python ge_usage.py --db demo.db dashboard --out dashboard.html --project ci
+
+      - name: The dashboard is self-contained
+        run: |
+          # It has to open on a workstation with no network access, so any
+          # external reference is a defect rather than a style preference.
+          python - <<'PY'
+          import pathlib, re, sys
+          html = pathlib.Path("dashboard.html").read_text(encoding="utf-8")
+          problems = []
+          for pattern in ("<link", "<script src", "@import"):
+              if pattern in html:
+                  problems.append(f"external reference: {pattern}")
+          urls = set(re.findall(r"https?://[^\"'\s)]+", html)) - {"http://www.w3.org/2000/svg"}
+          if urls:
+              problems.append(f"absolute URLs: {sorted(urls)}")
+          if re.search(r"__[A-Z]+__", html):
+              problems.append("unsubstituted template placeholder")
+          for p in problems:
+              print(f"::error::{p}")
+          print(f"{len(html) // 1024} KB, {'not ' if problems else ''}self-contained")
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: Redaction removes prompt text
+        run: |
+          python ge_usage.py --db demo.db dashboard \
+            --out redacted.html --project ci --redact-queries
+          if grep -q "status of order 4471" redacted.html; then
+            echo "::error::prompt text survived --redact-queries"
+            exit 1
+          fi
+          echo "prompt text absent"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-dashboard
+          path: dashboard.html
+          retention-days: 14
