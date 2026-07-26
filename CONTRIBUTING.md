@@ -11,10 +11,9 @@ same checks on Python 3.9 to 3.13.
 
 ## Constraints
 
-**No runtime dependencies.** The tool is standard library only so the directory
-can be copied onto a locked-down host and run in place. Anything extra goes
-behind an optional extra in `tools/`, as `capture_screenshots.py` does with
-Pillow.
+**No runtime dependencies.** Standard library only, so the directory can be
+copied onto a locked-down host and run in place. Anything extra goes behind an
+optional extra in `tools/`, as `capture_screenshots.py` does with Pillow.
 
 **Never commit collected data.** `usage.db` and `dashboard.html` hold real email
 addresses and prompt text. Both are gitignored and CI fails if either is
@@ -27,8 +26,7 @@ fetch. A unit test and a CI step both assert it.
 *direct child* reports the *same* token counts". Broadening it to "is an
 ancestor of a token-bearing span" looks like a simplification and is a bug:
 under agent-as-tool nesting the outer call is a different call, and both sets of
-tokens were really consumed. Four tests pin this down. If you are editing them
-to make a change pass, re-read them first.
+tokens were really consumed. Four tests pin this down.
 
 **Views are rebuilt on every connect; tables are not.** Changing a view needs
 nothing else. Adding a column needs an entry in `_ADDED_COLUMNS` so existing
@@ -52,4 +50,4 @@ rendering changed. If a crop lands mid-card, adjust `--splits`.
 
 ## Commits
 
-Conventional-commit subject, then a body explaining why. The diff covers what.
+Conventional-commit subject, then a body explaining why.

@@ -4,14 +4,7 @@ Export Gemini Enterprise token and activity telemetry **out of Google Cloud** in
 a local SQLite database, and read it internally, either as SQL or as a self-contained
 HTML dashboard that opens with no network access.
 
-Standard library only. No BigQuery, no log sink, no linked dataset, no Log
-Analytics, and no change of any kind to your Google Cloud project. The tool needs
-two read-only roles and nothing else.
-
 ![Dashboard overview](docs/images/dashboard-overview.png)
-
-*All figures and identities in the screenshots come from the synthetic generator in
-`tools/`. No real account, prompt or token count appears anywhere in this repository.*
 
 ---
 
@@ -41,26 +34,10 @@ two read-only roles and nothing else.
 ## 1. What this is for
 
 The usual way to report on Gemini Enterprise usage is to route logs into BigQuery
-and query them there. That works, and if you can do it, do it.
+and query them there or through Observability Analytics.
 
 This repository is for the case where you **cannot, or would rather not**, and
-the telemetry has to come *out* of Google Cloud and be read somewhere you control:
-
-- **Reporting from outside the platform.** The people who need the numbers do not
-  have Google Cloud access, and giving them a console seat or a BigQuery dataset is
-  not on the table.
-- **No changes to the project.** Creating a sink, a dataset and an IAM binding
-  means a change request. Two read-only roles usually does not.
-- **Air-gapped or restricted review.** The output is a single HTML file with no
-  external references, so it opens on a workstation with no internet access, and it
-  can be emailed or copied to a share as-is.
-- **History beyond the platform's retention.** Cloud Trace and the `_Default` log
-  bucket both drop records after 30 days. Collection is additive, so a scheduled run
-  accumulates a local history that outlives the source.
-- **Keeping the data under your own control.** Everything lands in one SQLite file
-  on a host you choose. Nothing is sent anywhere.
-- **Evaluating before committing.** Find out what the telemetry actually contains
-  before designing a pipeline around it.
+the telemetry has to come *out* of Google Cloud and be read somewhere you control.
 
 **What it is not.** Not a real-time monitor, not a billing system of record, and
 not a multi-user service. It is a read-only exporter and a local reporting layer.
@@ -495,34 +472,10 @@ for it. See [Extending it](#14-extending-it).
 For scale, 50,000 model calls is on the order of a hundred active users for a
 month, or a handful of users driving heavily-grounded agents.
 
-### The store is a single local file
-
-SQLite is the right shape for "get the data out and read it somewhere else", and
-the wrong shape for several things people will reasonably want next:
-
-- **One writer at a time.** Do not run two collections against the same database
-  concurrently; the second will block or fail on a lock. Schedule them serially.
-- **No access control.** File permissions are the only boundary. Every prompt and
-  every email address is in the clear to anyone who can read the file.
-- **Sharing means copying.** There is no server, so distributing the data means
-  distributing the personal data with it.
-- **No retention or rollup.** Rows accumulate indefinitely. Nothing expires, ages
-  out or pre-aggregates. Pruning is your `DELETE`.
-- **It is a derived copy, not a system of record.** The authoritative data lives in
-  Cloud Logging and Cloud Trace, and only for 30 days. Treat the local database as
-  a report, not as an audit trail, unless you back it up accordingly.
-- **Views are rebuilt on every connect.** Convenient for upgrades, but it means the
-  view definitions are not a stable contract. Anything downstream should read the
-  `turns` / `model_calls` / `tool_calls` tables.
-- **One project per database.** The collector records a single project id. Multiple
-  projects need multiple databases, or the schema change sketched below.
-- **Timestamps are ISO-8601 UTC strings**, compared lexicographically. That is why
-  `day` and `hour` are `substr()` expressions. There is no timezone conversion and
-  no date arithmetic beyond string slicing.
-
 ### Source-side limits
 
-- **30-day retention** at the source, as above.
+- **30-day retention.** Cloud Trace and the `_Default` log bucket both drop
+  records after 30 days, so nothing older can be collected retrospectively.
 - **Attribution** is bounded by the platform's trace propagation, not by this tool.
   See [section 11](#11-attribution-coverage).
 - **Cloud Trace sampling.** If a project samples traces, token counts reflect the
@@ -532,7 +485,7 @@ the wrong shape for several things people will reasonably want next:
 
 ## 14. Extending it
 
-The code is arranged so the two useful seams are obvious.
+Two seams matter.
 
 **`collector.py` returns plain dictionaries.** `collect_turns()` and
 `collect_spans()` do the Google Cloud reads and the trace-id join, and hand back
