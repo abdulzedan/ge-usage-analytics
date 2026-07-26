@@ -1,4 +1,4 @@
-# Collected telemetry. Contains real user identities and prompt text —
+# Collected telemetry. Contains real user identities and prompt text,
 # never commit these.
 *.db
 *.db-journal

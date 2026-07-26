@@ -89,7 +89,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     client = GcpClient(project)
     conn = store.connect(args.db)
 
-    print("\n[1/2] Cloud Logging — chat turns and user identity …", flush=True)
+    print("\n[1/2] Cloud Logging: chat turns and user identity …", flush=True)
     turns = collector.collect_turns(
         client, start=start, end=end, engine_id=args.engine_id
     )
@@ -97,7 +97,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     users = {t["user_principal"] for t in turns if t.get("user_principal")}
     print(f"      {n_turns:,} turns · {len(users)} distinct users")
 
-    print("\n[2/2] Cloud Trace — model spans and token counts …", flush=True)
+    print("\n[2/2] Cloud Trace: model spans and token counts …", flush=True)
     models, tools = collector.collect_spans(
         client, start=start, end=end, trace_filters=args.trace_filter
     )

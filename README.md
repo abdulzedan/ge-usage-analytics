@@ -1,7 +1,7 @@
 # Gemini Enterprise Usage Analytics
 
 Export Gemini Enterprise token and activity telemetry **out of Google Cloud** into
-a local SQLite database, and read it internally — as SQL, or as a self-contained
+a local SQLite database, and read it internally, either as SQL or as a self-contained
 HTML dashboard that opens with no network access.
 
 Standard library only. No BigQuery, no log sink, no linked dataset, no Log
@@ -43,7 +43,7 @@ two read-only roles and nothing else.
 The usual way to report on Gemini Enterprise usage is to route logs into BigQuery
 and query them there. That works, and if you can do it, do it.
 
-This repository is for the case where you **cannot, or would rather not** — where
+This repository is for the case where you **cannot, or would rather not**, and
 the telemetry has to come *out* of Google Cloud and be read somewhere you control:
 
 - **Reporting from outside the platform.** The people who need the numbers do not
@@ -83,7 +83,7 @@ neither is sufficient on its own.
 | Tool invocations and latency | `gen_ai.tool.name`, span timings | Cloud Trace |
 
 Token counts do not appear in any Cloud Logging payload. A log-only approach cannot
-report consumption regardless of how the logs are queried — which is the single
+report consumption regardless of how the logs are queried, which is the single
 most common reason a first attempt at this produces activity counts and no tokens.
 
 Both services stamp the same W3C trace id on their records. Joining on that id
@@ -96,10 +96,10 @@ performs that join locally.
 
 | Requirement | Detail |
 |---|---|
-| Python | 3.9 or later. Standard library only — nothing to install. |
+| Python | 3.9 or later. Standard library only, nothing to install. |
 | Google Cloud CLI | `gcloud`, authenticated. Used to obtain access tokens. |
 | APIs enabled | Cloud Logging API, Cloud Trace API. |
-| IAM roles | `roles/logging.viewer` and `roles/cloudtrace.user` — both read-only. |
+| IAM roles | `roles/logging.viewer` and `roles/cloudtrace.user`. Both read-only. |
 
 The tool never writes to Google Cloud. It issues read requests only, and the two
 roles above grant no mutating permissions.
@@ -170,10 +170,10 @@ project : YOUR_PROJECT_ID
 window  : 2026-06-24 18:06 → 2026-07-24 18:06 UTC
 database: /path/to/ge-usage-analytics/usage.db
 
-[1/2] Cloud Logging — chat turns and user identity …
+[1/2] Cloud Logging: chat turns and user identity …
       309 turns · 5 distinct users
 
-[2/2] Cloud Trace — model spans and token counts …
+[2/2] Cloud Trace: model spans and token counts …
       620 model calls · 379 tool calls
       3,231,449 input tokens · 369,803 output tokens
 
@@ -264,12 +264,12 @@ python3 ge_usage.py serve --port 8777 --open
 
 ## 8. The dashboard
 
-`dashboard.html` is a single file with **no external references** — data is
+`dashboard.html` is a single file with **no external references**. Data is
 embedded as JSON, charts are inline SVG, styling is one `<style>` element. No CDN,
 no build step and no network access are needed to view it. CI asserts this on every
 push, because it is the property the whole format depends on.
 
-A single filter row — range, surface, user, model, agent — scopes every chart at
+A single filter row (range, surface, user, model, agent) scopes every chart at
 once. Each chart has a **Table** button that shows the same figures as numbers, for
 anyone who needs to copy them out.
 
@@ -367,7 +367,7 @@ records are unavailable from the APIs at any price.
 Because collection is additive, running it on a schedule builds a local history
 that extends past that window.
 
-**Linux / macOS (cron)** — daily at 06:17, with a two-day overlap so a missed run
+**Linux / macOS (cron)**, daily at 06:17, with a two-day overlap so a missed run
 does not leave a hole:
 
 ```cron
@@ -400,8 +400,8 @@ before the figures are circulated.
 `generate_content` spans inside the same trace as the `StreamAssist` request. The
 trace id matches the log entry, so these resolve to a named account.
 
-**Turns routed to a custom agent** — an ADK agent on Agent Engine, or an A2A agent
-on Cloud Run — execute under a *separate* trace with its own root span. Gemini
+**Turns routed to a custom agent**, an ADK agent on Agent Engine or an A2A agent
+on Cloud Run, execute under a *separate* trace with its own root span. Gemini
 Enterprise does not propagate its trace context into that agent, so the tokens are
 captured accurately but arrive with no user attached.
 
@@ -445,7 +445,7 @@ Three fact tables and two views.
 
 ### View: `usage`
 
-One row per model call — the primary reporting view.
+One row per model call. The primary reporting view.
 
 | Column | Description |
 |---|---|
@@ -473,7 +473,7 @@ All timestamps are **UTC**.
 
 ### Volume
 
-Measured with the synthetic generator — roughly **675 bytes per model call** in
+Measured with the synthetic generator: roughly **675 bytes per model call** in
 SQLite and **232 bytes per model call** in the rendered dashboard:
 
 | Model calls | Database | Dashboard HTML | Verdict |
@@ -490,7 +490,7 @@ in 175 ms and a daily rollup in 70 ms on an ordinary laptop.
 JavaScript whenever a filter changes. Past roughly **50,000 model calls (~12 MB)**
 the page is noticeably slow to load and filter; past ~150,000 it is not worth
 opening. At that point use `query --format csv`, or move the data somewhere built
-for it — see [Extending it](#14-extending-it).
+for it. See [Extending it](#14-extending-it).
 
 For scale, 50,000 model calls is on the order of a hundred active users for a
 month, or a handful of users driving heavily-grounded agents.
@@ -549,7 +549,7 @@ ClickHouse or a warehouse, keeping the three `upsert_*` signatures. Nothing else
 changes; `ge_usage.py collect` will write to the new destination unmodified.
 
 ```python
-# store_postgres.py — same three entry points, different destination
+# store_postgres.py: same three entry points, different destination
 def upsert_model_calls(conn, rows):
     execute_values(conn.cursor(), """
         INSERT INTO model_calls (span_id, trace_id, start_time, model,
@@ -588,7 +588,7 @@ part.
   gets you most of the dashboard for free, with a server and access control.
 - **Feed an existing observability stack.** If Splunk, Elastic or Datadog is
   already the internal surface, emit the joined rows there instead of rendering
-  HTML — the join is the value, not the charts.
+  HTML. The join is the value, not the charts.
 - **Close the attribution gap.** Propagate W3C `traceparent` from Gemini Enterprise
   into your custom agents so their spans share the trace id of the originating
   turn. Every Agent Engine call would then resolve to a named user, and no change
@@ -711,7 +711,7 @@ make test
 make lint
 ```
 
-The test suite runs without credentials or network access — `urlopen` is replaced
+The test suite runs without credentials or network access. `urlopen` is replaced
 throughout, and the Google Cloud calls are stubbed. CI additionally runs an
 end-to-end job that builds a synthetic database, renders it, and asserts both that
 the generator is byte-for-byte reproducible and that the output carries no external

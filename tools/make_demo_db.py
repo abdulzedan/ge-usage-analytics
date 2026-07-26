@@ -117,7 +117,7 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
 
         # A turn handled by the core assistant shares its trace with the log
         # entry, so it resolves to a user. A turn routed to a custom agent runs
-        # under its own trace, and arrives with no identity attached — the same
+        # under its own trace, and arrives with no identity attached: the same
         # split a real collection shows.
         attributed = platform == "gcp.gemini_enterprise"
         if attributed:
