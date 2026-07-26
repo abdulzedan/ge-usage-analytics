@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from html import escape as html_escape
 from typing import Any
 
 _TEMPLATE = r"""<!doctype html>
@@ -777,6 +778,23 @@ render();
 """
 
 
+def _embed_json(obj: Any) -> str:
+    """Serialise `obj` for inclusion inside an inline <script> element.
+
+    Prompt text is arbitrary user input. An HTML parser ends a script element at
+    the first literal `</script>`, without regard for JavaScript string quoting,
+    so a user who typed that into the assistant would truncate the page. `<`, `>`
+    and `&` are emitted as \\uXXXX escapes, which JSON parses back to the original
+    characters while leaving nothing for the HTML tokeniser to act on.
+    """
+    return (
+        json.dumps(obj, separators=(",", ":"))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def _short_model(model: str | None) -> str:
     """`projects/p/locations/l/publishers/google/models/gemini-x` -> `gemini-x`."""
     if not model:
@@ -841,9 +859,9 @@ def render_dashboard(
     meta = {"maxTime": max_time, "minTime": min_time, "project": project}
 
     return (
-        _TEMPLATE.replace("__DATA__", json.dumps(payload, separators=(",", ":")))
-        .replace("__META__", json.dumps(meta, separators=(",", ":")))
-        .replace("__TITLE__", title)
-        .replace("__SUBTITLE__", subtitle)
+        _TEMPLATE.replace("__DATA__", _embed_json(payload))
+        .replace("__META__", _embed_json(meta))
+        .replace("__TITLE__", html_escape(title))
+        .replace("__SUBTITLE__", html_escape(subtitle))
         .replace("__THEME__", theme)
     )

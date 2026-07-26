@@ -157,3 +157,40 @@ def test_a_call_with_no_matching_turn_renders_as_unattributed(tmp_path):
     assert row["at"] == 0
     assert row["f"] == "Agent Engine"
     conn.close()
+
+
+def test_html_special_characters_in_data_do_not_break_the_document(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.upsert_turns(
+        conn,
+        [
+            {
+                "trace_id": "t1",
+                "user_principal": "dana@example.com",
+                "query_text": "</script><b>not markup</b>",
+            }
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {
+                "span_id": "s1",
+                "trace_id": "t1",
+                "start_time": "2026-07-01T09:00:00",
+                "input_tokens": 1,
+                "output_tokens": 1,
+            }
+        ],
+    )
+    html = render_dashboard(conn, project="example-project")
+
+    # The HTML tokeniser ends a script element at the first literal `</script>`,
+    # regardless of JavaScript quoting. Only the template's own closing tag may
+    # appear literally; the prompt's copy must be escaped.
+    assert html.count("</script>") == 1
+    assert "\\u003c/script\\u003e" in html
+
+    # ...and the escaping is lossless once JSON-decoded.
+    assert _payload(html)["queries"]["t1"] == "</script><b>not markup</b>"
+    conn.close()
