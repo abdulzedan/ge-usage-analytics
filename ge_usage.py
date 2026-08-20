@@ -148,12 +148,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
     if total and pct < 100:
         print(
-            "  Core-assistant turns share their trace id with the StreamAssist log entry\n"
-            "  and resolve directly. Work spawned by a turn (Deep Research sub-agents run\n"
-            "  one trace each) is recovered through the session id its spans carry. What\n"
-            "  remains is a custom agent (ADK on Agent Engine, or A2A on Cloud Run) running\n"
-            "  under its own trace id with no session stamped, so its tokens are counted\n"
-            "  with no end user attached. See 'Attribution coverage' in the README."
+            "  Calls that execute inside the StreamAssist request trace resolve directly;\n"
+            "  a call under its own trace id resolves only if its spans carry the Gemini\n"
+            "  Enterprise session. Deep Research's detached sub-agent calls currently carry\n"
+            "  neither key, and a custom agent (ADK on Agent Engine, or A2A on Cloud Run)\n"
+            "  carries none unless it stamps one, so those tokens are counted with no end\n"
+            "  user attached. See 'Attribution coverage' in the README."
         )
     conn.close()
     return 0

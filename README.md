@@ -166,11 +166,11 @@ database: /path/to/ge-usage-analytics/usage.db
       to be enabled per project; see 'NotebookLM Enterprise' in the README.
 
 by surface:
-  Gemini Enterprise       223 calls     195 user-attributed     2,079,056 tokens
+  Gemini Enterprise       223 calls     121 user-attributed     2,079,056 tokens
   Agent Engine            397 calls       0 user-attributed     1,522,196 tokens
 
-attributed to a user: 195/620 model calls (31.5%)
-  121 via trace id · 74 via session id
+attributed to a user: 121/620 model calls (19.5%)
+  121 via trace id · 0 via session id
 ```
 
 Then:
@@ -387,31 +387,42 @@ Not every model call can be linked to a named user. This is worth understanding
 before the figures are circulated, because it decides how they should be read:
 **total token figures are complete; the per-user split is a floor.**
 
-A model call is attributed through one of two keys, both stamped on the data by
-the platform. The `usage` view records which one matched in `attributed_via`.
+A model call is attributed through one of two keys, both exact identifiers
+found on the data itself. The `usage` view records which one matched in
+`attributed_via`.
 
 **Via trace id.** Turns handled by the Gemini Enterprise core assistant emit
 their `generate_content` spans inside the same trace as the `StreamAssist`
 request, so the span joins straight to the log entry that names the account.
 
-**Via session id.** Work that a turn *spawns* runs under fresh trace ids —
-Deep Research is the prominent case. The request itself is one logged
-StreamAssist turn; the planning call runs inside that turn's trace and resolves
-normally, but each research sub-agent then executes under a trace of its own,
-which a trace-only join cannot reach. Those spans still carry the session in
-`gen_ai.conversation.id`, and a session belongs to exactly one signed-in
-account, so the tool resolves them through the session's logged turns instead
-(taking the latest turn at or before the span, since a long-running turn can be
-logged after its work has started).
+**Via session id.** A call that ran under its own trace still resolves when
+its spans carry the Gemini Enterprise session in `gen_ai.conversation.id`: a
+session belongs to exactly one signed-in account, so the tool takes the
+session's latest turn at or before the span (falling back to its first later
+one, since a long-running turn can be logged after its work begins). This is
+the key an agent team controls — stamp the session, or propagate
+`traceparent`, and attribution follows with no change to this tool. See
+[Extending it](#15-extending-it).
 
-**Unattributed.** A turn routed to a custom agent — an ADK agent on Agent
-Engine, or an A2A agent on Cloud Run — executes under its own trace, and Gemini
-Enterprise does not propagate its trace context into it. The conversation id
-its spans carry, if any, is the agent's own Agent Engine session, not the
-Gemini Enterprise one, so neither key matches. The tokens are captured
-accurately and arrive with no user attached. Both joins are exact keys; the
-tool never assigns a user by time proximity, so `(unattributed)` means exactly
-that.
+**Unattributed.** Everything that carries neither key. A custom agent — ADK
+on Agent Engine, or A2A on Cloud Run — executes under its own trace, Gemini
+Enterprise does not propagate trace context into it, and the conversation id
+its spans carry by default is the agent's own Agent Engine session, not the
+Gemini Enterprise one. The tokens are captured accurately and arrive with no
+user attached. Both joins are exact keys; the tool never assigns a user by
+time proximity, so `(unattributed)` means exactly that.
+
+### Deep Research
+
+Deep Research is why per-agent coverage matters more than the single
+percentage. Observed on a live project (August 2026): the request is one
+logged StreamAssist turn; the planner and a minority of sub-agent calls
+execute inside that turn's trace and resolve through it; the remaining
+sub-agents run detached, and their spans carry **no session id either** — so
+no exact key exists today, and they stay unattributed under their own
+`deep_research_child_N` agent names. Their tokens are fully counted; the
+per-user split simply cannot include them yet. If a platform update stamps
+either key on those spans, they start resolving with no change to this tool.
 
 Per-agent coverage is one query:
 
@@ -424,19 +435,22 @@ ORDER BY total_tokens DESC;
 
 | Agent | Surface | Calls | Via trace | Via session | Unattributed | Tokens |
 |---|---|---|---|---|---|---|
-| Claims Coordinator | Agent Engine | 397 | 0 | 0 | 397 | 1,522,196 |
-| Deep Research | Gemini Enterprise | 96 | 22 | 74 | 0 | 1,201,338 |
-| core_assistant | Gemini Enterprise | 127 | 99 | 0 | 28 | 877,718 |
+| Claims Coordinator | Agent Engine | 118 | 0 | 0 | 118 | 1,648,256 |
+| core_assistant | Gemini Enterprise | 114 | 114 | 0 | 0 | 1,643,475 |
+| Contract Review | Agent Engine | 78 | 0 | 78 | 0 | 1,057,286 |
+| deep_research_child_2 | Gemini Enterprise | 14 | 3 | 0 | 11 | 618,508 |
+| deep_research | Gemini Enterprise | 14 | 14 | 0 | 0 | 94,715 |
 
-*Representative figures from a 30-day sample. The core assistant's 28
-unattributed calls are traces whose log entries had already aged out of the
-window; Deep Research resolves fully once the session join is in play.*
+*From the synthetic demo data, shaped like a live collection: Claims
+Coordinator stamps nothing and stays dark, Contract Review stamps the Gemini
+Enterprise session and resolves fully, and Deep Research resolves only where
+its calls landed inside the request trace.*
 
-The residual gap is a characteristic of the platform's tracing, not of the
+The residual gap is a characteristic of the platform's telemetry, not of the
 collection method. The same split appears in any pipeline built on these
-sources, **including a BigQuery-based one**. Closing it requires trace-context
-propagation from Gemini Enterprise into the agent runtime; see
-[Extending it](#15-extending-it).
+sources, **including a BigQuery-based one**. Closing it requires the spans to
+carry a key — trace context propagated into the agent, or the session stamped
+on its spans; see [Extending it](#15-extending-it).
 
 ---
 

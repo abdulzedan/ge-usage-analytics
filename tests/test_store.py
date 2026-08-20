@@ -112,11 +112,11 @@ def test_usage_view_attributes_calls_to_the_logged_user(conn):
 
 
 def test_usage_view_recovers_a_user_through_the_session_when_the_trace_breaks(conn):
-    """The Deep Research shape: sub-agents run under their own trace ids.
+    """The session-stamping shape: work under its own trace ids.
 
-    The parent call shares the StreamAssist trace and resolves normally. Each
-    sub-agent call arrives with a fresh trace id, but its spans still carry the
-    session, and a session belongs to exactly one signed-in account.
+    The call on the request trace resolves through it. A call under a fresh
+    trace resolves only because its spans carry the Gemini Enterprise session,
+    and a session belongs to exactly one signed-in account.
     """
     store.upsert_turns(
         conn,
@@ -125,8 +125,8 @@ def test_usage_view_recovers_a_user_through_the_session_when_the_trace_breaks(co
                 "trace_id": "trace-parent",
                 "ts": "2026-07-01T09:00:00",
                 "user_principal": "dana@example.com",
-                "query_text": "Research the EU battery regulation timeline.",
-                "agent_display_name": "Deep Research",
+                "query_text": "Compare our standard terms against the redlined contract.",
+                "agent_display_name": "Contract Review",
                 "session_id": "s-9",
             }
         ],
@@ -145,10 +145,10 @@ def test_usage_view_recovers_a_user_through_the_session_when_the_trace_breaks(co
             },
             {
                 "span_id": "trace-sub:1",
-                "trace_id": "trace-sub",  # the sub-agent's own trace
+                "trace_id": "trace-sub",  # the agent's own trace
                 "start_time": "2026-07-01T09:01:00",
-                "session_id": "s-9",
-                "agent_name": "research_subagent",
+                "session_id": "s-9",  # the Gemini Enterprise session, stamped
+                "agent_name": "contract_review_worker",
                 "input_tokens": 4000,
                 "output_tokens": 400,
             },
@@ -163,8 +163,8 @@ def test_usage_view_recovers_a_user_through_the_session_when_the_trace_breaks(co
     assert sub["attributed"] == 1
     assert sub["attributed_via"] == "session"
     assert sub["user_principal"] == "dana@example.com"
-    assert sub["query_text"] == "Research the EU battery regulation timeline."
-    assert sub["agent"] == "research_subagent"  # the span's own agent, not the turn's
+    assert sub["query_text"] == "Compare our standard terms against the redlined contract."
+    assert sub["agent"] == "contract_review_worker"  # the span's own agent, not the turn's
 
 
 def test_session_fallback_takes_the_latest_turn_at_or_before_the_span(conn):
@@ -271,7 +271,7 @@ def test_usage_by_agent_splits_the_attribution_methods(conn):
     store.upsert_turns(
         conn,
         [{"trace_id": "t1", "ts": "2026-07-01T09:00:00",
-          "user_principal": "dana@example.com", "agent_display_name": "Deep Research",
+          "user_principal": "dana@example.com", "agent_display_name": "Contract Review",
           "session_id": "s-9"}],
     )
     store.upsert_model_calls(
@@ -282,7 +282,7 @@ def test_usage_by_agent_splits_the_attribution_methods(conn):
              "agent_name": None, "input_tokens": 10, "output_tokens": 1},
             {"span_id": "b", "trace_id": "x1", "start_time": "2026-07-01T09:01:00",
              "platform": "gcp.gemini_enterprise", "session_id": "s-9",
-             "agent_name": "Deep Research", "input_tokens": 20, "output_tokens": 2},
+             "agent_name": "Contract Review", "input_tokens": 20, "output_tokens": 2},
             {"span_id": "c", "trace_id": "x2", "start_time": "2026-07-01T09:02:00",
              "platform": "gcp.agent_engine", "session_id": None,
              "agent_name": "Claims Coordinator", "input_tokens": 30, "output_tokens": 3},
@@ -291,11 +291,11 @@ def test_usage_by_agent_splits_the_attribution_methods(conn):
 
     rows = {(r["agent"], r["surface"]): r for r in conn.execute("SELECT * FROM usage_by_agent")}
 
-    dr = rows[("Deep Research", "Gemini Enterprise")]
-    assert dr["model_calls"] == 2
-    assert dr["attributed_calls"] == 2
-    assert dr["via_trace"] == 1
-    assert dr["via_session"] == 1
+    cr = rows[("Contract Review", "Gemini Enterprise")]
+    assert cr["model_calls"] == 2
+    assert cr["attributed_calls"] == 2
+    assert cr["via_trace"] == 1
+    assert cr["via_session"] == 1
 
     cc = rows[("Claims Coordinator", "Agent Engine")]
     assert cc["attributed_calls"] == 0

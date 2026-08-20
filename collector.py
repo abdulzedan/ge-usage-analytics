@@ -10,11 +10,11 @@ Neither source is sufficient on its own:
   `gen_ai.request.model` as span labels. They carry no user identity.
 
 Both stamp the same W3C trace id, so joining on it reconstructs
-user -> prompt -> model -> tokens. Where a turn spawns work under fresh trace
-ids -- each Deep Research sub-agent runs one -- the `gen_ai.conversation.id`
-label on those spans is the remaining exact link back to the session, and the
-session's turns name the account. This module collects and parses both sides;
-the join itself is the `usage` view in store.py.
+user -> prompt -> model -> tokens. Where a call runs under its own trace id,
+the `gen_ai.conversation.id` label on its spans -- when the emitter stamps
+one -- is the remaining exact link back to the session, and the session's
+turns name the account. This module collects and parses both sides; the join
+itself is the `usage` view in store.py.
 """
 
 from __future__ import annotations

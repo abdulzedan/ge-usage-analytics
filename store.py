@@ -8,10 +8,11 @@ Four fact tables:
   notebooklm_activity  one row per NotebookLM action   (source: Cloud Logging; no tokens exist)
 
 The `usage` view joins model_calls back to the account that initiated them, on
-trace id first and on session id where the trace id breaks (Deep Research
-sub-agents and other spawned work run under their own traces but still carry
-the session). Both joins are exact keys; a call matching neither stays
-unattributed rather than being guessed.
+trace id first and on session id where the trace id breaks. The session key
+re-attaches work that ran under its own traces but stamped the Gemini
+Enterprise session on its spans; work that stamped nothing (Deep Research's
+detached sub-agent calls, as observed live, and custom agents by default)
+stays unattributed rather than being guessed. Both joins are exact keys.
 
 Cloud Trace and the _Default log bucket both expire records after 30 days, so a
 database populated on a schedule retains history beyond the platform's own
@@ -96,12 +97,12 @@ CREATE TABLE IF NOT EXISTS meta (
 #
 #   1. trace id -- the span executed inside the same trace as the StreamAssist
 #      log entry. Core-assistant calls resolve this way.
-#   2. session id -- the span ran under its own trace (Deep Research sub-agents
-#      spawn one each) but its `gen_ai.conversation.id` label names the session,
-#      and a session belongs to exactly one signed-in account. Among the
-#      session's turns, the latest one at or before the span is taken (the log
-#      entry can be stamped after long-running work starts, so a call with no
-#      earlier turn falls back to the session's first later one).
+#   2. session id -- the span ran under its own trace but its
+#      `gen_ai.conversation.id` label names the Gemini Enterprise session, and
+#      a session belongs to exactly one signed-in account. Among the session's
+#      turns, the latest one at or before the span is taken (the log entry can
+#      be stamped after long-running work starts, so a call with no earlier
+#      turn falls back to the session's first later one).
 #
 # A call matching neither key stays unattributed; nothing is inferred from time
 # proximity across sessions.

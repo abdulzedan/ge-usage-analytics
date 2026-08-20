@@ -36,13 +36,22 @@ USERS = [
     ("jen.castellanos@example.com", 4),
 ]
 
-# (display name, engine surface, model, share)
+# (display name, engine surface, model, linkage, share)
+#
+# `linkage` is where the agent's model calls land relative to the logged turn,
+# which is what decides attribution:
+#   trace    inside the turn's own trace (core assistant and agents hosted in
+#            Gemini Enterprise)
+#   session  under the agent's own traces, with the Gemini Enterprise session
+#            stamped on the spans -- the close-the-gap recipe from the README
+#   none     under the agent's own traces and its own Agent Engine session,
+#            so no key matches and the calls stay unattributed
 AGENTS = [
-    ("Order Support", "gcp.gemini_enterprise", "gemini-2.5-flash", 26),
-    ("Policy Lookup", "gcp.gemini_enterprise", "gemini-3-pro", 20),
-    ("core_assistant", "gcp.gemini_enterprise", "gemini-2.5-flash", 18),
-    ("Claims Coordinator", "gcp.agent_engine", "gemini-3-pro", 22),
-    ("Contract Review", "gcp.agent_engine", "gemini-2.5-pro", 14),
+    ("Order Support", "gcp.gemini_enterprise", "gemini-2.5-flash", "trace", 26),
+    ("Policy Lookup", "gcp.gemini_enterprise", "gemini-3-pro", "trace", 20),
+    ("core_assistant", "gcp.gemini_enterprise", "gemini-2.5-flash", "trace", 18),
+    ("Claims Coordinator", "gcp.agent_engine", "gemini-3-pro", "none", 22),
+    ("Contract Review", "gcp.agent_engine", "gemini-2.5-pro", "session", 14),
 ]
 
 PROMPTS = [
@@ -114,28 +123,33 @@ def _weighted(rng: random.Random, options: list[tuple]) -> tuple:
 def _research_call(
     rng: random.Random,
     trace_id: str,
+    step: int,
     start_at: dt.datetime,
-    session_id: str,
-    engine_id: str,
+    agent_name: str,
     *,
     heavy: bool,
 ) -> dict:
-    """One Deep Research model call; `heavy` marks the reading-laden sub-agents."""
+    """One Deep Research model call; `heavy` marks the reading-laden sub-agents.
+
+    No session id on any of these: as observed on a live project, Deep
+    Research spans carry the engine and their own agent name but no
+    `gen_ai.conversation.id`, so only calls inside the request trace resolve.
+    """
     latency = rng.uniform(4.0, 30.0)
     return {
-        "span_id": f"{trace_id}:{1 if heavy else 0:02x}",
+        "span_id": f"{trace_id}:{step:02x}",
         "trace_id": trace_id,
         "start_time": start_at.strftime("%Y-%m-%dT%H:%M:%S"),
         "end_time": (start_at + dt.timedelta(seconds=latency)).strftime("%Y-%m-%dT%H:%M:%S"),
         "span_name": "generate_content",
         "platform": "gcp.gemini_enterprise",
-        "resource_id": "projects/1234/locations/global/agents/deep-research",
+        "resource_id": f"projects/1234/locations/global/agents/{agent_name}",
         "model": "gemini-3-pro",
         "input_tokens": int(rng.uniform(18000, 80000) if heavy else rng.uniform(2000, 9000)),
         "output_tokens": int(rng.uniform(400, 2600)),
-        "agent_name": "Deep Research",
-        "session_id": session_id,
-        "engine_id": engine_id,
+        "agent_name": agent_name,
+        "session_id": None,
+        "engine_id": "support-app_1700000000000",
         "latency_ms": int(latency * 1000),
     }
 
@@ -163,36 +177,33 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
 
     for n in range(turns):
         user = _weighted(rng, USERS)[0]
-        agent, platform, model, _ = _weighted(rng, AGENTS)
+        agent, platform, model, linkage, _ = _weighted(rng, AGENTS)
         started = _turn_time(rng, end, days)
-        trace_id = f"{seed:04x}{n:028x}"
+        turn_trace = f"{seed:04x}{n:028x}"
         session_id = str(4000 + n // 3)
         engine_id = "support-app_1700000000000"
 
-        # A turn handled by the core assistant shares its trace with the log
-        # entry, so it resolves to a user. A turn routed to a custom agent runs
-        # under its own trace, and arrives with no identity attached: the same
-        # split a real collection shows. Its spans do carry a conversation id,
-        # but it is the agent's own Agent Engine session, not the Gemini
-        # Enterprise one, so the session join cannot re-attach it either.
-        attributed = platform == "gcp.gemini_enterprise"
-        call_session = session_id if attributed else str(90000 + n // 3)
-        if attributed:
-            turn_rows.append(
-                {
-                    "trace_id": trace_id,
-                    "ts": started.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "user_principal": user,
-                    "query_text": rng.choice(PROMPTS),
-                    # zlib.crc32, not hash(): str hashing is salted per process.
-                    "agent_id": str(8800000000 + zlib.crc32(agent.encode()) % 99999999),
-                    "agent_display_name": agent,
-                    "engine_id": engine_id,
-                    "session_id": session_id,
-                    "location": "global",
-                    "insert_id": f"insert-{n}",
-                }
-            )
+        # Every turn is logged with the signed-in account and the session,
+        # whichever agent answers it. Attribution is decided lower down, by
+        # where the agent's spans land (see AGENTS).
+        turn_rows.append(
+            {
+                "trace_id": turn_trace,
+                "ts": started.strftime("%Y-%m-%dT%H:%M:%S"),
+                "user_principal": user,
+                "query_text": rng.choice(PROMPTS),
+                # zlib.crc32, not hash(): str hashing is salted per process.
+                "agent_id": str(8800000000 + zlib.crc32(agent.encode()) % 99999999),
+                "agent_display_name": agent,
+                "engine_id": engine_id,
+                "session_id": session_id,
+                "location": "global",
+                "insert_id": f"insert-{n}",
+            }
+        )
+
+        call_trace = turn_trace if linkage == "trace" else f"{seed:04x}a{n:027x}"
+        call_session = str(90000 + n // 3) if linkage == "none" else session_id
 
         # One turn fans out into one or more model calls.
         for step in range(rng.choices([1, 2, 3], weights=[62, 28, 10], k=1)[0]):
@@ -205,13 +216,13 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
 
             model_rows.append(
                 {
-                    "span_id": f"{trace_id}:{step:02x}",
-                    "trace_id": trace_id,
+                    "span_id": f"{call_trace}:{step:02x}",
+                    "trace_id": call_trace,
                     "start_time": call_start.strftime("%Y-%m-%dT%H:%M:%S"),
                     "end_time": (call_start + dt.timedelta(seconds=latency)).strftime(
                         "%Y-%m-%dT%H:%M:%S"
                     ),
-                    "span_name": "generate_content" if attributed else "call_llm",
+                    "span_name": "generate_content" if linkage == "trace" else "call_llm",
                     "platform": platform,
                     "resource_id": f"projects/1234/locations/global/agents/{n % 97}",
                     "model": model,
@@ -229,8 +240,8 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
                 tool_latency = rng.uniform(0.05, 2.4)
                 tool_rows.append(
                     {
-                        "span_id": f"{trace_id}:t{step:02x}",
-                        "trace_id": trace_id,
+                        "span_id": f"{call_trace}:t{step:02x}",
+                        "trace_id": call_trace,
                         "start_time": call_start.strftime("%Y-%m-%dT%H:%M:%S"),
                         "end_time": (call_start + dt.timedelta(seconds=tool_latency)).strftime(
                             "%Y-%m-%dT%H:%M:%S"
@@ -241,27 +252,28 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
                     }
                 )
 
-    # Deep Research turns. The request itself is an ordinary StreamAssist turn,
-    # so the planner call shares its trace and resolves normally; each research
-    # sub-agent then runs under a trace of its own. The sub-agent spans still
-    # carry the session, which is how the tool re-attaches them to the user.
+    # Deep Research turns, shaped like the live behaviour (observed August
+    # 2026): the request is one logged StreamAssist turn that records no
+    # agentInfo; the planner and a minority of sub-agent calls execute inside
+    # the request trace and resolve through it; the remaining sub-agents run
+    # under traces of their own with no session stamped, so no exact key
+    # exists and they stay unattributed under their deep_research_child_N
+    # agent names.
     for n in range(max(2, turns // 30)):
         user = _weighted(rng, USERS)[0]
         started = _turn_time(rng, end, days)
-        trace_id = f"{seed:04x}d{n:027x}"
-        session_id = str(7000 + n)
-        engine_id = "support-app_1700000000000"
+        turn_trace = f"{seed:04x}d{n:027x}"
 
         turn_rows.append(
             {
-                "trace_id": trace_id,
+                "trace_id": turn_trace,
                 "ts": started.strftime("%Y-%m-%dT%H:%M:%S"),
                 "user_principal": user,
                 "query_text": rng.choice(RESEARCH_PROMPTS),
-                "agent_id": str(8800000000 + zlib.crc32(b"Deep Research") % 99999999),
-                "agent_display_name": "Deep Research",
-                "engine_id": engine_id,
-                "session_id": session_id,
+                "agent_id": None,
+                "agent_display_name": None,
+                "engine_id": "support-app_1700000000000",
+                "session_id": str(7000 + n),
                 "location": "global",
                 "insert_id": f"insert-dr-{n}",
             }
@@ -269,21 +281,24 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
 
         # The planner, on the turn's own trace.
         model_rows.append(
-            _research_call(rng, trace_id, started + dt.timedelta(seconds=2),
-                           session_id, engine_id, heavy=False)
+            _research_call(rng, turn_trace, 0, started + dt.timedelta(seconds=2),
+                           "deep_research", heavy=False)
         )
 
-        # Parallel sub-agents, one fresh trace each.
+        # Parallel sub-agents: some land in the request trace, the rest run
+        # detached and unrecoverable until the platform stamps a key.
         for k in range(rng.randint(3, 6)):
-            sub_trace = f"{seed:04x}e{n:013x}{k:014x}"
+            in_trace = rng.random() < 0.4
+            child_trace = turn_trace if in_trace else f"{seed:04x}e{n:013x}{k:014x}"
             sub_start = started + dt.timedelta(seconds=rng.uniform(20, 240))
             model_rows.append(
-                _research_call(rng, sub_trace, sub_start, session_id, engine_id, heavy=True)
+                _research_call(rng, child_trace, k + 1, sub_start,
+                               f"deep_research_child_{k}", heavy=not in_trace)
             )
             tool_rows.append(
                 {
-                    "span_id": f"{sub_trace}:t01",
-                    "trace_id": sub_trace,
+                    "span_id": f"{child_trace}:t{k + 1:02x}",
+                    "trace_id": child_trace,
                     "start_time": sub_start.strftime("%Y-%m-%dT%H:%M:%S"),
                     "end_time": (sub_start + dt.timedelta(seconds=1.2)).strftime(
                         "%Y-%m-%dT%H:%M:%S"

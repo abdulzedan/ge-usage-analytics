@@ -11,12 +11,15 @@ minority of its model calls, and NotebookLM Enterprise did not appear at all.
 ### Added
 
 - Session-id attribution. A model call whose trace id matches no logged turn is
-  now resolved through the session its spans carry (`gen_ai.conversation.id`)
-  before being declared unattributed. Deep Research is the population this
-  recovers: the request logs one StreamAssist turn, the planner call shares its
-  trace, and each research sub-agent runs under a trace of its own but keeps the
-  session. Both joins are exact keys; nothing is ever attributed by time
-  proximity.
+  now resolved through the Gemini Enterprise session its spans carry
+  (`gen_ai.conversation.id`) before being declared unattributed. This is the
+  key an agent team controls: stamp the session, or propagate `traceparent`,
+  and the agent's calls resolve with no tool change. Deep Research — the case
+  that prompted the work — turns out not to be recoverable yet: observed live,
+  its planner and some sub-agent calls share the request trace and resolve,
+  while its detached sub-agent calls carry neither key, so they now surface
+  under their own agent names instead of vanishing into an anonymous bucket.
+  Both joins are exact keys; nothing is ever attributed by time proximity.
 - `attributed_via` on the `usage` view (`trace`, `session`, or NULL) and a
   `usage_by_agent` view splitting each agent's calls by attribution method, so a
   partially-attributed agent is visible as such instead of quietly inflating the
