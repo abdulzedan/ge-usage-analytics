@@ -33,6 +33,17 @@ minority of its model calls, and NotebookLM Enterprise did not appear at all.
   surface, so it is reported as activity and never mixed into token figures.
 - The demo generator produces both new populations, so the behaviour is
   visible without a Google Cloud project.
+- `agent_group` on the `usage` view, folding Deep Research's planner and
+  `deep_research_child_N` sub-agents into one entity. The dashboard's agent
+  dimension uses it, so ranking the people behind a fan-out feature is one
+  filter or GROUP BY; the per-child grain stays in `agent` and
+  `usage_by_agent` for coverage diagnosis.
+
+### Changed
+
+- The rendered dashboard no longer carries the attribution explainer
+  paragraph. The page is what gets shown around; the mechanics live in the
+  README's Attribution coverage section for whoever operates the tool.
 
 ## [1.0.0] 2026-07-26
 

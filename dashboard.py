@@ -242,7 +242,8 @@ _TEMPLATE = r"""<!doctype html>
         <h2>Chat turns by agent</h2>
         <button class="ghost toggle" type="button" data-view="agent">Table</button>
       </header>
-      <p class="desc">Distinct user turns handled by each registered agent.</p>
+      <p class="desc">Distinct user turns handled by each agent. Deep Research and its research
+    sub-agents count as one.</p>
       <div class="plot" id="plotAgent"></div>
       <div class="tablewrap hidden" id="tableAgent"></div>
     </div>
@@ -832,7 +833,7 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             "t": r["start_time"],
             "u": r["user_principal"],
             "m": _short_model(r["model"]),
-            "a": r["agent"],
+            "a": r["agent_group"],
             "i": r["input_tokens"] or 0,
             "o": r["output_tokens"] or 0,
             "r": r["trace_id"],

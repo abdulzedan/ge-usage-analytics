@@ -117,6 +117,18 @@ VIEWS = """
 DROP VIEW IF EXISTS usage;
 CREATE VIEW usage AS
 SELECT
+    u.*,
+    -- Deep Research executes as a planner plus deep_research_child_N
+    -- sub-agents. agent_group folds that family into one entity so
+    -- per-feature questions (who uses Deep Research most) are one
+    -- filter or GROUP BY, while `agent` keeps the per-child grain
+    -- needed to diagnose attribution coverage.
+    CASE
+        WHEN u.agent LIKE 'deep\\_research%' ESCAPE '\\' THEN 'Deep Research'
+        ELSE u.agent
+    END                                                 AS agent_group
+FROM (
+SELECT
     m.start_time                                        AS start_time,
     substr(m.start_time, 1, 10)                         AS day,
     substr(m.start_time, 12, 2)                         AS hour,
@@ -161,7 +173,8 @@ FROM (
     FROM model_calls mc
 ) m
 LEFT JOIN turns t ON t.trace_id = m.trace_id
-LEFT JOIN turns s ON t.trace_id IS NULL AND s.trace_id = m.session_trace;
+LEFT JOIN turns s ON t.trace_id IS NULL AND s.trace_id = m.session_trace
+) u;
 
 DROP VIEW IF EXISTS usage_by_user;
 CREATE VIEW usage_by_user AS
@@ -184,6 +197,7 @@ DROP VIEW IF EXISTS usage_by_agent;
 CREATE VIEW usage_by_agent AS
 SELECT
     COALESCE(agent, '(none)')       AS agent,
+    COALESCE(agent_group, '(none)') AS agent_group,
     surface,
     COUNT(*)                        AS model_calls,
     COUNT(DISTINCT trace_id)        AS turns,
@@ -196,7 +210,7 @@ SELECT
     MIN(start_time)                 AS first_seen,
     MAX(start_time)                 AS last_seen
 FROM usage
-GROUP BY 1, 2;
+GROUP BY 1, 2, 3;
 
 DROP VIEW IF EXISTS notebooklm_by_user;
 CREATE VIEW notebooklm_by_user AS

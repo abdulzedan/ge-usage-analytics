@@ -302,6 +302,40 @@ def test_usage_by_agent_splits_the_attribution_methods(conn):
     assert cc["total_tokens"] == 33
 
 
+def test_agent_group_folds_the_deep_research_family(conn):
+    """deep_research and its child_N sub-agents report as one entity.
+
+    `agent` keeps the per-child grain for coverage diagnosis; `agent_group` is
+    what per-feature questions (who uses Deep Research most) group by.
+    """
+    store.upsert_model_calls(
+        conn,
+        [
+            {"span_id": "a", "trace_id": "x1", "start_time": "2026-07-01T09:00:00",
+             "agent_name": "deep_research", "input_tokens": 1, "output_tokens": 1},
+            {"span_id": "b", "trace_id": "x2", "start_time": "2026-07-01T09:01:00",
+             "agent_name": "deep_research_child_7", "input_tokens": 2, "output_tokens": 2},
+            {"span_id": "c", "trace_id": "x3", "start_time": "2026-07-01T09:02:00",
+             "agent_name": "Order Support", "input_tokens": 3, "output_tokens": 3},
+        ],
+    )
+
+    groups = {r["agent"]: r["agent_group"] for r in conn.execute("SELECT * FROM usage")}
+    assert groups == {
+        "deep_research": "Deep Research",
+        "deep_research_child_7": "Deep Research",
+        "Order Support": "Order Support",
+    }
+
+    rollup = conn.execute(
+        "SELECT SUM(total_tokens) t, COUNT(*) c FROM usage WHERE agent_group = 'Deep Research'"
+    ).fetchone()
+    assert (rollup["t"], rollup["c"]) == (6, 2)
+
+    by_agent = {r["agent"]: r["agent_group"] for r in conn.execute("SELECT * FROM usage_by_agent")}
+    assert by_agent["deep_research_child_7"] == "Deep Research"
+
+
 def test_notebooklm_activity_round_trip_and_rollup(conn):
     rows = [
         {"insert_id": "n1", "ts": "2026-07-01T09:00:00",

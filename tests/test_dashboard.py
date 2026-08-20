@@ -121,6 +121,24 @@ def test_a_session_attributed_call_is_marked_as_such(conn):
     assert rows["sub"]["v"] == "s"
 
 
+def test_the_agent_dimension_folds_the_deep_research_family(conn):
+    store.upsert_model_calls(
+        conn,
+        [
+            {
+                "span_id": "dr:1",
+                "trace_id": "dr-detached",
+                "start_time": "2026-07-01T09:05:00",
+                "agent_name": "deep_research_child_3",
+                "input_tokens": 10,
+                "output_tokens": 2,
+            }
+        ],
+    )
+    rows = {r["r"]: r for r in _payload(render_dashboard(conn, project="p"))["rows"]}
+    assert rows["dr-detached"]["a"] == "Deep Research"
+
+
 def test_notebooklm_rollup_is_embedded_and_counted(conn):
     store.upsert_notebooklm_activity(
         conn,

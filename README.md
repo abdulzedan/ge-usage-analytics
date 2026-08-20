@@ -264,8 +264,10 @@ no build step and no network access are needed to view it. CI asserts this on ev
 push, because it is the property the whole format depends on.
 
 A single filter row (range, surface, user, model, agent) scopes every chart at
-once. Each chart has a **Table** button that shows the same figures as numbers, for
-anyone who needs to copy them out.
+once. The agent dimension folds Deep Research and its research sub-agents into
+one entry, so selecting **Deep Research** and reading the tokens-by-user chart
+answers "who uses it most" directly. Each chart has a **Table** button that
+shows the same figures as numbers, for anyone who needs to copy them out.
 
 ![Breakdowns by agent and by hour](docs/images/dashboard-breakdowns.png)
 
@@ -450,6 +452,19 @@ Coordinator stamps nothing and stays dark, Contract Review stamps the Gemini
 Enterprise session and resolves fully, and Deep Research resolves only where
 its calls landed inside the request trace.*
 
+That per-child grain is for diagnosing coverage. For ranking people, the
+`agent_group` column folds the whole family into one entity — it is also what
+the dashboard's agent dimension uses:
+
+```sql
+-- Who uses Deep Research the most (the attributed floor)
+SELECT user_principal, COUNT(*) AS calls, SUM(total_tokens) AS tokens
+FROM usage
+WHERE agent_group = 'Deep Research'
+GROUP BY 1
+ORDER BY tokens DESC;
+```
+
 The residual gap is a characteristic of the platform's telemetry, not of the
 collection method. The same split appears in any pipeline built on these
 sources, **including a BigQuery-based one**. Closing it requires the spans to
@@ -542,6 +557,7 @@ One row per model call. The primary reporting view.
 | `attributed_via` | `trace`, `session`, or NULL — which key resolved it |
 | `query_text` | Prompt text, where available |
 | `agent`, `engine`, `session_id` | Routing context |
+| `agent_group` | `agent`, with the Deep Research fan-out folded into one entity |
 | `surface` | `Gemini Enterprise` or `Agent Engine` |
 | `model` | Model name |
 | `input_tokens`, `output_tokens`, `total_tokens` | Consumption |
