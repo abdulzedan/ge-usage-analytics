@@ -41,7 +41,7 @@ CHROME_CANDIDATES = [
 # Where the page is split into separate images, in device pixels at 2x scale.
 # These land inside the blank gutters between cards; adjust if the dashboard
 # layout changes materially.
-DEFAULT_SPLITS = (2790, 4322)
+DEFAULT_SPLITS = (2146, 4430)
 
 VIEWPORT_WIDTH = 1440
 CAPTURE_HEIGHT = 4600
