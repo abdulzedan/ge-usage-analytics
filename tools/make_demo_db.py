@@ -90,11 +90,11 @@ RESEARCH_PROMPTS = [
 
 NOTEBOOK_ACTIONS = [
     # (action, carries a prompt, share) — the service paths the log records
-    ("NotebookService.GenerateFreeFormStreamed", True, 45),
-    ("NotebookService.InteractSources", True, 15),
-    ("SourceService.UploadSourceFile", False, 20),
-    ("SourceService.BatchCreateSources", False, 10),
-    ("NotebookService.CreateNotebook", False, 10),
+    ("GenerateFreeFormStreamed", True, 45),
+    ("InteractSources", True, 15),
+    ("UploadSourceFile", False, 20),
+    ("BatchCreateSources", False, 10),
+    ("CreateNotebook", False, 10),
 ]
 
 NOTEBOOK_PROMPTS = [

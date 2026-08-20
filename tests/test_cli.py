@@ -171,7 +171,7 @@ def test_stats_appends_notebooklm_activity_when_present(db, capsys):
         conn,
         [{"insert_id": "n1", "ts": "2026-07-02T10:00:00",
           "user_principal": "dana@example.com",
-          "action": "NotebookService.GenerateFreeFormStreamed",
+          "action": "GenerateFreeFormStreamed",
           "notebook_id": "nb-1"}],
     )
     conn.close()
@@ -364,7 +364,7 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
                 "insert_id": "n1",
                 "ts": "2026-07-01T10:00:00",
                 "user_principal": "dana@example.com",
-                "action": "NotebookService.GenerateFreeFormStreamed",
+                "action": "GenerateFreeFormStreamed",
                 "notebook_id": "nb-1",
             }
         ],

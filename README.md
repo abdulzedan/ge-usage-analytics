@@ -515,9 +515,10 @@ retroactively — history starts when the setting is turned on, so enable it
 well before the numbers are needed.
 
 **What the log carries, and what it cannot.** Entries record the acting
-account, the action (`NotebookService.GenerateFreeFormStreamed` for a chat
-question, `SourceService.UploadSourceFile`, `NotebookService.CreateNotebook`,
-sharing, and so on), the notebook, and the prompt for chat-style actions.
+account, the action (`GenerateFreeFormStreamed` for a chat question,
+`UploadSourceFile`, `CreateNotebook`, sharing, and so on — the documentation
+lists these prefixed with their service, the entries carry the bare method
+name), the notebook, and the prompt for chat-style actions.
 **There are no token counts**, and NotebookLM emits no `gen_ai.usage.*` spans
 into the project's Cloud Trace, so there is no consumption figure to join the
 way chat turns are joined. That is a property of the product's telemetry

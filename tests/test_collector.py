@@ -209,7 +209,7 @@ def _notebooklm_entry(**overrides):
         "jsonPayload": {
             "userIamPrincipal": "dana@example.com",
             "logMetadata": {
-                "methodName": "NotebookService.GenerateFreeFormStreamed",
+                "methodName": "GenerateFreeFormStreamed",
             },
             "request": {
                 "name": "projects/1234/locations/global/notebooks/nb-77",
@@ -227,7 +227,7 @@ def test_parse_notebooklm_activity_extracts_identity_action_and_prompt():
         "insert_id": "nblm-1",
         "ts": "2026-07-01T09:30:00",
         "user_principal": "dana@example.com",
-        "action": "NotebookService.GenerateFreeFormStreamed",
+        "action": "GenerateFreeFormStreamed",
         "notebook_id": "nb-77",
         "query_text": "Summarise the uploaded contracts.",
         "location": "global",
@@ -243,13 +243,13 @@ def test_parse_notebooklm_activity_accepts_the_snake_case_spelling():
 
 def test_parse_notebooklm_activity_without_a_prompt_yields_none():
     entry = _notebooklm_entry()
-    entry["jsonPayload"]["logMetadata"]["methodName"] = "SourceService.UploadSourceFile"
+    entry["jsonPayload"]["logMetadata"]["methodName"] = "UploadSourceFile"
     entry["jsonPayload"]["request"] = {
         "parent": "projects/1234/notebooks/nb-77",
         "blob": {"filename": "contract.pdf"},
     }
     row = collector.parse_notebooklm_activity(entry)
-    assert row["action"] == "SourceService.UploadSourceFile"
+    assert row["action"] == "UploadSourceFile"
     assert row["query_text"] is None
     assert row["notebook_id"] == "nb-77"
 

@@ -145,7 +145,7 @@ def test_notebooklm_rollup_is_embedded_and_counted(conn):
         [
             {"insert_id": "n1", "ts": "2026-07-01T09:00:00",
              "user_principal": "dana@example.com",
-             "action": "NotebookService.GenerateFreeFormStreamed",
+             "action": "GenerateFreeFormStreamed",
              "notebook_id": "nb-1", "query_text": "secret prompt"},
         ],
     )

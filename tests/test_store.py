@@ -340,11 +340,11 @@ def test_notebooklm_activity_round_trip_and_rollup(conn):
     rows = [
         {"insert_id": "n1", "ts": "2026-07-01T09:00:00",
          "user_principal": "dana@example.com",
-         "action": "NotebookService.GenerateFreeFormStreamed",
+         "action": "GenerateFreeFormStreamed",
          "notebook_id": "nb-1", "query_text": "Summarise the sources."},
         {"insert_id": "n2", "ts": "2026-07-02T10:00:00",
          "user_principal": "dana@example.com",
-         "action": "SourceService.UploadSourceFile",
+         "action": "UploadSourceFile",
          "notebook_id": "nb-2", "query_text": None},
     ]
     assert store.upsert_notebooklm_activity(conn, rows) == 2
