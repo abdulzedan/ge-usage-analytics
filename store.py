@@ -1,12 +1,17 @@
 """Local SQLite store for Gemini Enterprise usage telemetry.
 
-Three fact tables, related by trace id:
+Four fact tables:
 
-  turns        one row per user chat turn   (source: Cloud Logging)
-  model_calls  one row per LLM call         (source: Cloud Trace span attributes)
-  tool_calls   one row per tool execution   (source: Cloud Trace span attributes)
+  turns                one row per user chat turn      (source: Cloud Logging)
+  model_calls          one row per LLM call            (source: Cloud Trace span attributes)
+  tool_calls           one row per tool execution      (source: Cloud Trace span attributes)
+  notebooklm_activity  one row per NotebookLM action   (source: Cloud Logging; no tokens exist)
 
-The `usage` view joins model_calls back to the account that initiated them.
+The `usage` view joins model_calls back to the account that initiated them, on
+trace id first and on session id where the trace id breaks (Deep Research
+sub-agents and other spawned work run under their own traces but still carry
+the session). Both joins are exact keys; a call matching neither stays
+unattributed rather than being guessed.
 
 Cloud Trace and the _Default log bucket both expire records after 30 days, so a
 database populated on a schedule retains history beyond the platform's own
@@ -32,8 +37,9 @@ CREATE TABLE IF NOT EXISTS turns (
     location            TEXT,
     insert_id           TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_turns_ts   ON turns(ts);
-CREATE INDEX IF NOT EXISTS idx_turns_user ON turns(user_principal);
+CREATE INDEX IF NOT EXISTS idx_turns_ts      ON turns(ts);
+CREATE INDEX IF NOT EXISTS idx_turns_user    ON turns(user_principal);
+CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 
 CREATE TABLE IF NOT EXISTS model_calls (
     span_id        TEXT PRIMARY KEY,
@@ -65,6 +71,18 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_tools_trace ON tool_calls(trace_id);
 
+CREATE TABLE IF NOT EXISTS notebooklm_activity (
+    insert_id       TEXT PRIMARY KEY,
+    ts              TEXT,
+    user_principal  TEXT,
+    action          TEXT,
+    notebook_id     TEXT,
+    query_text      TEXT,
+    location        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nblm_ts   ON notebooklm_activity(ts);
+CREATE INDEX IF NOT EXISTS idx_nblm_user ON notebooklm_activity(user_principal);
+
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT
@@ -73,6 +91,20 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 # Views are rebuilt on every connect so a schema change never needs a manual drop.
+#
+# Attribution is a two-key join, both keys exact:
+#
+#   1. trace id -- the span executed inside the same trace as the StreamAssist
+#      log entry. Core-assistant calls resolve this way.
+#   2. session id -- the span ran under its own trace (Deep Research sub-agents
+#      spawn one each) but its `gen_ai.conversation.id` label names the session,
+#      and a session belongs to exactly one signed-in account. Among the
+#      session's turns, the latest one at or before the span is taken (the log
+#      entry can be stamped after long-running work starts, so a call with no
+#      earlier turn falls back to the session's first later one).
+#
+# A call matching neither key stays unattributed; nothing is inferred from time
+# proximity across sessions.
 VIEWS = """
 DROP VIEW IF EXISTS usage;
 CREATE VIEW usage AS
@@ -82,11 +114,18 @@ SELECT
     substr(m.start_time, 12, 2)                         AS hour,
     m.trace_id                                          AS trace_id,
     m.span_id                                           AS span_id,
-    COALESCE(t.user_principal, '(unattributed)')        AS user_principal,
-    CASE WHEN t.trace_id IS NULL THEN 0 ELSE 1 END      AS attributed,
-    t.query_text                                        AS query_text,
-    COALESCE(t.agent_display_name, m.agent_name)        AS agent,
-    COALESCE(t.engine_id, m.engine_id)                  AS engine,
+    COALESCE(t.user_principal, s.user_principal, '(unattributed)')
+                                                        AS user_principal,
+    CASE WHEN t.trace_id IS NULL AND s.trace_id IS NULL THEN 0 ELSE 1 END
+                                                        AS attributed,
+    CASE
+        WHEN t.trace_id IS NOT NULL THEN 'trace'
+        WHEN s.trace_id IS NOT NULL THEN 'session'
+    END                                                 AS attributed_via,
+    COALESCE(t.query_text, s.query_text)                AS query_text,
+    COALESCE(t.agent_display_name, m.agent_name, s.agent_display_name)
+                                                        AS agent,
+    COALESCE(t.engine_id, m.engine_id, s.engine_id)     AS engine,
     COALESCE(t.session_id, m.session_id)                AS session_id,
     CASE
         WHEN m.platform = 'gcp.gemini_enterprise' THEN 'Gemini Enterprise'
@@ -99,7 +138,17 @@ SELECT
     m.input_tokens + m.output_tokens                    AS total_tokens,
     m.latency_ms                                        AS latency_ms
 FROM model_calls m
-LEFT JOIN turns t ON t.trace_id = m.trace_id;
+LEFT JOIN turns t ON t.trace_id = m.trace_id
+LEFT JOIN turns s ON t.trace_id IS NULL AND s.trace_id = (
+    SELECT t2.trace_id
+    FROM turns t2
+    WHERE m.session_id IS NOT NULL AND m.session_id != '-'
+      AND t2.session_id = m.session_id
+    ORDER BY CASE WHEN t2.ts <= m.start_time THEN 0 ELSE 1 END,
+             CASE WHEN t2.ts <= m.start_time THEN t2.ts END DESC,
+             t2.ts
+    LIMIT 1
+);
 
 DROP VIEW IF EXISTS usage_by_user;
 CREATE VIEW usage_by_user AS
@@ -116,6 +165,36 @@ SELECT
     MIN(start_time)                 AS first_seen,
     MAX(start_time)                 AS last_seen
 FROM usage
+GROUP BY user_principal;
+
+DROP VIEW IF EXISTS usage_by_agent;
+CREATE VIEW usage_by_agent AS
+SELECT
+    COALESCE(agent, '(none)')       AS agent,
+    surface,
+    COUNT(*)                        AS model_calls,
+    COUNT(DISTINCT trace_id)        AS turns,
+    SUM(attributed)                 AS attributed_calls,
+    SUM(CASE WHEN attributed_via = 'trace'   THEN 1 ELSE 0 END) AS via_trace,
+    SUM(CASE WHEN attributed_via = 'session' THEN 1 ELSE 0 END) AS via_session,
+    SUM(input_tokens)               AS input_tokens,
+    SUM(output_tokens)              AS output_tokens,
+    SUM(total_tokens)               AS total_tokens,
+    MIN(start_time)                 AS first_seen,
+    MAX(start_time)                 AS last_seen
+FROM usage
+GROUP BY 1, 2;
+
+DROP VIEW IF EXISTS notebooklm_by_user;
+CREATE VIEW notebooklm_by_user AS
+SELECT
+    user_principal,
+    COUNT(*)                          AS activities,
+    COUNT(DISTINCT notebook_id)       AS notebooks,
+    COUNT(DISTINCT substr(ts, 1, 10)) AS active_days,
+    MIN(ts)                           AS first_seen,
+    MAX(ts)                           AS last_seen
+FROM notebooklm_activity
 GROUP BY user_principal;
 """
 
@@ -172,6 +251,10 @@ def upsert_model_calls(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]])
 
 def upsert_tool_calls(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     return _upsert(conn, "tool_calls", rows)
+
+
+def upsert_notebooklm_activity(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _upsert(conn, "notebooklm_activity", rows)
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:

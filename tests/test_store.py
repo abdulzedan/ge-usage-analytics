@@ -22,8 +22,12 @@ def _names(conn, kind):
 
 
 def test_connect_creates_tables_and_views(conn):
-    assert {"turns", "model_calls", "tool_calls", "meta"} <= _names(conn, "table")
-    assert {"usage", "usage_by_user"} <= _names(conn, "view")
+    assert {"turns", "model_calls", "tool_calls", "notebooklm_activity", "meta"} <= _names(
+        conn, "table"
+    )
+    assert {"usage", "usage_by_user", "usage_by_agent", "notebooklm_by_user"} <= _names(
+        conn, "view"
+    )
 
 
 def test_connect_is_repeatable(tmp_path):
@@ -100,8 +104,226 @@ def test_usage_view_attributes_calls_to_the_logged_user(conn):
 
     orphan = rows["trace-b:1"]
     assert orphan["attributed"] == 0
+    assert orphan["attributed_via"] is None
     assert orphan["user_principal"] == "(unattributed)"
     assert orphan["surface"] == "Agent Engine"
+
+    assert rows["trace-a:1"]["attributed_via"] == "trace"
+
+
+def test_usage_view_recovers_a_user_through_the_session_when_the_trace_breaks(conn):
+    """The Deep Research shape: sub-agents run under their own trace ids.
+
+    The parent call shares the StreamAssist trace and resolves normally. Each
+    sub-agent call arrives with a fresh trace id, but its spans still carry the
+    session, and a session belongs to exactly one signed-in account.
+    """
+    store.upsert_turns(
+        conn,
+        [
+            {
+                "trace_id": "trace-parent",
+                "ts": "2026-07-01T09:00:00",
+                "user_principal": "dana@example.com",
+                "query_text": "Research the EU battery regulation timeline.",
+                "agent_display_name": "Deep Research",
+                "session_id": "s-9",
+            }
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {
+                "span_id": "trace-parent:1",
+                "trace_id": "trace-parent",
+                "start_time": "2026-07-01T09:00:05",
+                "session_id": "s-9",
+                "agent_name": None,
+                "input_tokens": 100,
+                "output_tokens": 10,
+            },
+            {
+                "span_id": "trace-sub:1",
+                "trace_id": "trace-sub",  # the sub-agent's own trace
+                "start_time": "2026-07-01T09:01:00",
+                "session_id": "s-9",
+                "agent_name": "research_subagent",
+                "input_tokens": 4000,
+                "output_tokens": 400,
+            },
+        ],
+    )
+
+    rows = {r["span_id"]: r for r in conn.execute("SELECT * FROM usage")}
+
+    assert rows["trace-parent:1"]["attributed_via"] == "trace"
+
+    sub = rows["trace-sub:1"]
+    assert sub["attributed"] == 1
+    assert sub["attributed_via"] == "session"
+    assert sub["user_principal"] == "dana@example.com"
+    assert sub["query_text"] == "Research the EU battery regulation timeline."
+    assert sub["agent"] == "research_subagent"  # the span's own agent, not the turn's
+
+
+def test_session_fallback_takes_the_latest_turn_at_or_before_the_span(conn):
+    store.upsert_turns(
+        conn,
+        [
+            {
+                "trace_id": "turn-1",
+                "ts": "2026-07-01T09:00:00",
+                "user_principal": "dana@example.com",
+                "query_text": "first prompt",
+                "session_id": "s-9",
+            },
+            {
+                "trace_id": "turn-2",
+                "ts": "2026-07-01T10:00:00",
+                "user_principal": "dana@example.com",
+                "query_text": "second prompt",
+                "session_id": "s-9",
+            },
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {"span_id": "a", "trace_id": "x1", "start_time": "2026-07-01T09:30:00",
+             "session_id": "s-9", "input_tokens": 1, "output_tokens": 1},
+            {"span_id": "b", "trace_id": "x2", "start_time": "2026-07-01T10:30:00",
+             "session_id": "s-9", "input_tokens": 1, "output_tokens": 1},
+        ],
+    )
+
+    rows = {r["span_id"]: r for r in conn.execute("SELECT * FROM usage")}
+    assert rows["a"]["query_text"] == "first prompt"
+    assert rows["b"]["query_text"] == "second prompt"
+
+
+def test_session_fallback_covers_a_log_entry_stamped_after_the_span(conn):
+    """A long-running turn can be logged at completion, after its work began."""
+    store.upsert_turns(
+        conn,
+        [
+            {
+                "trace_id": "turn-late",
+                "ts": "2026-07-01T09:10:00",
+                "user_principal": "dana@example.com",
+                "session_id": "s-9",
+            }
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {"span_id": "early", "trace_id": "x1", "start_time": "2026-07-01T09:00:30",
+             "session_id": "s-9", "input_tokens": 1, "output_tokens": 1}
+        ],
+    )
+
+    row = conn.execute("SELECT * FROM usage").fetchone()
+    assert row["attributed_via"] == "session"
+    assert row["user_principal"] == "dana@example.com"
+
+
+def test_a_placeholder_session_id_never_attributes(conn):
+    """`sessions/-` means no persisted session; matching on it would cross users."""
+    store.upsert_turns(
+        conn,
+        [{"trace_id": "t1", "ts": "2026-07-01T09:00:00",
+          "user_principal": "dana@example.com", "session_id": "-"}],
+    )
+    store.upsert_model_calls(
+        conn,
+        [{"span_id": "s1", "trace_id": "other", "start_time": "2026-07-01T09:01:00",
+          "session_id": "-", "input_tokens": 1, "output_tokens": 1}],
+    )
+
+    row = conn.execute("SELECT * FROM usage").fetchone()
+    assert row["attributed"] == 0
+    assert row["user_principal"] == "(unattributed)"
+
+
+def test_the_trace_join_wins_over_the_session_join(conn):
+    store.upsert_turns(
+        conn,
+        [
+            {"trace_id": "t-own", "ts": "2026-07-01T09:00:00",
+             "user_principal": "own@example.com", "session_id": "s-other"},
+            {"trace_id": "t-session", "ts": "2026-07-01T08:00:00",
+             "user_principal": "other@example.com", "session_id": "s-9"},
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [{"span_id": "s1", "trace_id": "t-own", "start_time": "2026-07-01T09:00:05",
+          "session_id": "s-9", "input_tokens": 1, "output_tokens": 1}],
+    )
+
+    row = conn.execute("SELECT * FROM usage").fetchone()
+    assert row["attributed_via"] == "trace"
+    assert row["user_principal"] == "own@example.com"
+
+
+def test_usage_by_agent_splits_the_attribution_methods(conn):
+    store.upsert_turns(
+        conn,
+        [{"trace_id": "t1", "ts": "2026-07-01T09:00:00",
+          "user_principal": "dana@example.com", "agent_display_name": "Deep Research",
+          "session_id": "s-9"}],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {"span_id": "a", "trace_id": "t1", "start_time": "2026-07-01T09:00:05",
+             "platform": "gcp.gemini_enterprise", "session_id": "s-9",
+             "agent_name": None, "input_tokens": 10, "output_tokens": 1},
+            {"span_id": "b", "trace_id": "x1", "start_time": "2026-07-01T09:01:00",
+             "platform": "gcp.gemini_enterprise", "session_id": "s-9",
+             "agent_name": "Deep Research", "input_tokens": 20, "output_tokens": 2},
+            {"span_id": "c", "trace_id": "x2", "start_time": "2026-07-01T09:02:00",
+             "platform": "gcp.agent_engine", "session_id": None,
+             "agent_name": "Claims Coordinator", "input_tokens": 30, "output_tokens": 3},
+        ],
+    )
+
+    rows = {(r["agent"], r["surface"]): r for r in conn.execute("SELECT * FROM usage_by_agent")}
+
+    dr = rows[("Deep Research", "Gemini Enterprise")]
+    assert dr["model_calls"] == 2
+    assert dr["attributed_calls"] == 2
+    assert dr["via_trace"] == 1
+    assert dr["via_session"] == 1
+
+    cc = rows[("Claims Coordinator", "Agent Engine")]
+    assert cc["attributed_calls"] == 0
+    assert cc["total_tokens"] == 33
+
+
+def test_notebooklm_activity_round_trip_and_rollup(conn):
+    rows = [
+        {"insert_id": "n1", "ts": "2026-07-01T09:00:00",
+         "user_principal": "dana@example.com",
+         "action": "NotebookService.GenerateFreeFormStreamed",
+         "notebook_id": "nb-1", "query_text": "Summarise the sources."},
+        {"insert_id": "n2", "ts": "2026-07-02T10:00:00",
+         "user_principal": "dana@example.com",
+         "action": "SourceService.UploadSourceFile",
+         "notebook_id": "nb-2", "query_text": None},
+    ]
+    assert store.upsert_notebooklm_activity(conn, rows) == 2
+    assert store.upsert_notebooklm_activity(conn, rows) == 2  # idempotent on insert_id
+    assert conn.execute("SELECT COUNT(*) c FROM notebooklm_activity").fetchone()["c"] == 2
+
+    summary = conn.execute("SELECT * FROM notebooklm_by_user").fetchone()
+    assert summary["user_principal"] == "dana@example.com"
+    assert summary["activities"] == 2
+    assert summary["notebooks"] == 2
+    assert summary["active_days"] == 2
+    assert summary["first_seen"] == "2026-07-01T09:00:00"
+    assert summary["last_seen"] == "2026-07-02T10:00:00"
 
 
 def test_usage_view_falls_back_to_the_raw_platform_label(conn):
