@@ -61,9 +61,13 @@ neither is sufficient on its own.
 | Tool invocations and latency | `gen_ai.tool.name`, span timings | Cloud Trace |
 | NotebookLM Enterprise actions | `notebooklm_enterprise_user_activity` log (opt-in) | Cloud Logging |
 
-Token counts do not appear in any Cloud Logging payload. A log-only approach cannot
+Token counts do not appear in the user-activity log. A log-only approach cannot
 report consumption regardless of how the logs are queried, which is the single
 most common reason a first attempt at this produces activity counts and no tokens.
+(August 2026 release notes describe an experimental `gen_ai.*` log family for
+Gemini Enterprise agents that carries usage attributes; it was absent from the
+projects this tool was built against, so Cloud Trace remains the dependable
+source.)
 
 Both services stamp the same W3C trace id on their records. Joining on that id
 reconstructs the full picture: *account → prompt → model → tokens*. This tool
@@ -458,7 +462,8 @@ on its spans; see [Extending it](#15-extending-it).
 
 NotebookLM Enterprise is invisible to a Gemini Enterprise usage pipeline unless
 two things are understood: it writes to a different log, and that log is off
-until someone turns it on.
+until someone turns it on. (Google renamed the product *Gemini Notebook
+Enterprise* in July 2026; the APIs and the log id below keep the old name.)
 
 **A separate, opt-in log.** NotebookLM records user activity to
 `notebooklm_enterprise_user_activity`, not to the
@@ -670,7 +675,12 @@ part.
   into your custom agents so their spans share the trace id of the originating
   turn — or have the agent stamp the Gemini Enterprise session on its spans'
   `gen_ai.conversation.id`, which the session join picks up. Either way, every
-  Agent Engine call resolves to a named user with no change to this tool.
+  Agent Engine call resolves to a named user with no change to this tool. Two
+  more identifiers to watch as the platform's telemetry evolves: ADK 2.1's
+  content-capture opt-in records a `user.id` field on the agent's own
+  telemetry, and StreamAssist tool spans carry a documented
+  `gemini_enterprise.assist_token` attribute — so far observed only inside the
+  request trace, where the trace join already resolves everything.
 - **Alerting.** `query` returns a shell-friendly exit and CSV; a threshold check on
   a schedule is a few lines of cron.
 - **Host the dashboard.** `serve` already binds `127.0.0.1`. Putting it behind an
