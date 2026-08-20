@@ -61,21 +61,19 @@ neither is sufficient on its own.
 | Tool invocations and latency | `gen_ai.tool.name`, span timings | Cloud Trace |
 | NotebookLM Enterprise actions | `notebooklm_enterprise_user_activity` log (opt-in) | Cloud Logging |
 
-Token counts do not appear in the user-activity log. A log-only approach cannot
-report consumption regardless of how the logs are queried, which is the single
-most common reason a first attempt at this produces activity counts and no tokens.
-(August 2026 release notes describe an experimental `gen_ai.*` log family for
-Gemini Enterprise agents that carries usage attributes; it was absent from the
-projects this tool was built against, so Cloud Trace remains the dependable
-source.)
+Token counts do not appear in the user-activity log, which is why a log-only
+approach produces activity counts and no tokens. (August 2026 release notes
+describe an experimental `gen_ai.*` log family that carries usage attributes;
+it was absent from the projects this tool was built against, so Cloud Trace
+remains the dependable source.)
 
 Both services stamp the same W3C trace id on their records. Joining on that id
-reconstructs the full picture: *account → prompt → model → tokens*. This tool
-performs that join locally — on the trace id, and on the session id where a call
-ran under its own trace (see [Attribution coverage](#11-attribution-coverage)).
+reconstructs *account → prompt → model → tokens*. This tool performs that join
+locally, on the trace id and, where a call ran under its own trace, on the
+session id (see [Attribution coverage](#11-attribution-coverage)).
 
-NotebookLM is the exception to all of the above: its log is separate, disabled by
-default, and records activity without any token counterpart in Cloud Trace. See
+NotebookLM is the exception: a separate log, disabled by default, with no
+token counterpart in Cloud Trace. See
 [NotebookLM Enterprise](#12-notebooklm-enterprise).
 
 ---
@@ -264,10 +262,9 @@ no build step and no network access are needed to view it. CI asserts this on ev
 push, because it is the property the whole format depends on.
 
 A single filter row (range, surface, user, model, agent) scopes every chart at
-once. The agent dimension folds Deep Research and its research sub-agents into
-one entry, so selecting **Deep Research** and reading the tokens-by-user chart
-answers "who uses it most" directly. Each chart has a **Table** button that
-shows the same figures as numbers, for anyone who needs to copy them out.
+once. The agent dimension folds Deep Research and its sub-agents into one
+entry, so one filter answers who uses it most. Each chart has a **Table**
+button that shows the same figures as numbers.
 
 ![Breakdowns by agent and by hour](docs/images/dashboard-breakdowns.png)
 
@@ -389,46 +386,40 @@ gcloud auth activate-service-account --key-file=/path/to/key.json
 
 ## 11. Attribution coverage
 
-Not every model call can be linked to a named user. This is worth understanding
-before the figures are circulated, because it decides how they should be read:
-**total token figures are complete; the per-user split is a floor.**
+Not every model call can be linked to a named user. Read the figures
+accordingly: **token totals are complete; the per-user split is a floor.**
 
-A model call is attributed through one of two keys, both exact identifiers
-found on the data itself. The `usage` view records which one matched in
-`attributed_via`.
+A model call is attributed through one of two exact keys. The `usage` view
+records which one matched in `attributed_via`.
 
-**Via trace id.** Turns handled by the Gemini Enterprise core assistant emit
-their `generate_content` spans inside the same trace as the `StreamAssist`
-request, so the span joins straight to the log entry that names the account.
+**Via trace id.** Core-assistant turns emit their `generate_content` spans
+inside the same trace as the `StreamAssist` request, so the span joins
+straight to the log entry that names the account.
 
-**Via session id.** A call that ran under its own trace still resolves when
-its spans carry the Gemini Enterprise session in `gen_ai.conversation.id`: a
-session belongs to exactly one signed-in account, so the tool takes the
-session's latest turn at or before the span (falling back to its first later
-one, since a long-running turn can be logged after its work begins). This is
-the key an agent team controls — stamp the session, or propagate
-`traceparent`, and attribution follows with no change to this tool. See
-[Extending it](#15-extending-it).
+**Via session id.** A call under its own trace still resolves when its spans
+carry the Gemini Enterprise session in `gen_ai.conversation.id`; a session
+belongs to exactly one signed-in account. The tool takes the session's latest
+turn at or before the span, falling back to its first later one because a
+long-running turn can be logged after its work begins. This is the key an
+agent team controls: stamp the session, or propagate `traceparent`, and
+attribution follows with no change to this tool.
 
-**Unattributed.** Everything that carries neither key. A custom agent — ADK
-on Agent Engine, or A2A on Cloud Run — executes under its own trace, Gemini
-Enterprise does not propagate trace context into it, and the conversation id
-its spans carry by default is the agent's own Agent Engine session, not the
-Gemini Enterprise one. The tokens are captured accurately and arrive with no
-user attached. Both joins are exact keys; the tool never assigns a user by
-time proximity, so `(unattributed)` means exactly that.
+**Unattributed.** Everything that carries neither key. A custom agent (ADK on
+Agent Engine, A2A on Cloud Run) runs under its own trace, receives no trace
+context from Gemini Enterprise, and its default conversation id is its own
+Agent Engine session. Its tokens are counted accurately with no user attached.
+Nothing is ever attributed by time proximity, so `(unattributed)` means
+exactly that.
 
 ### Deep Research
 
-Deep Research is why per-agent coverage matters more than the single
-percentage. Observed on a live project (August 2026): the request is one
-logged StreamAssist turn; the planner and a minority of sub-agent calls
-execute inside that turn's trace and resolve through it; the remaining
-sub-agents run detached, and their spans carry **no session id either** — so
-no exact key exists today, and they stay unattributed under their own
-`deep_research_child_N` agent names. Their tokens are fully counted; the
-per-user split simply cannot include them yet. If a platform update stamps
-either key on those spans, they start resolving with no change to this tool.
+Observed on a live project (August 2026): the request is one logged
+StreamAssist turn; the planner and a minority of sub-agent calls execute
+inside that turn's trace and resolve; the remaining sub-agents run detached
+with **no session id either**, so they stay unattributed under their own
+`deep_research_child_N` names. Their tokens are fully counted. If a platform
+update stamps either key on those spans, they start resolving with no change
+to this tool.
 
 Per-agent coverage is one query:
 
@@ -447,14 +438,13 @@ ORDER BY total_tokens DESC;
 | deep_research_child_2 | Gemini Enterprise | 14 | 3 | 0 | 11 | 618,508 |
 | deep_research | Gemini Enterprise | 14 | 14 | 0 | 0 | 94,715 |
 
-*From the synthetic demo data, shaped like a live collection: Claims
-Coordinator stamps nothing and stays dark, Contract Review stamps the Gemini
-Enterprise session and resolves fully, and Deep Research resolves only where
-its calls landed inside the request trace.*
+*From the synthetic demo data: Claims Coordinator stamps nothing, Contract
+Review stamps the session and resolves fully, Deep Research resolves only
+inside the request trace.*
 
-That per-child grain is for diagnosing coverage. For ranking people, the
-`agent_group` column folds the whole family into one entity — it is also what
-the dashboard's agent dimension uses:
+The per-child grain is for diagnosing coverage. For ranking people, the
+`agent_group` column folds the family into one entity; the dashboard's agent
+dimension uses it too:
 
 ```sql
 -- Who uses Deep Research the most (the attributed floor)
@@ -465,28 +455,24 @@ GROUP BY 1
 ORDER BY tokens DESC;
 ```
 
-The residual gap is a characteristic of the platform's telemetry, not of the
-collection method. The same split appears in any pipeline built on these
-sources, **including a BigQuery-based one**. Closing it requires the spans to
-carry a key — trace context propagated into the agent, or the session stamped
-on its spans; see [Extending it](#15-extending-it).
+The residual gap is platform telemetry, not the collection method. The same
+split appears in any pipeline built on these sources, **including a
+BigQuery-based one**. Closing it requires the spans to carry a key; see
+[Extending it](#15-extending-it).
 
 ---
 
 ## 12. NotebookLM Enterprise
 
-NotebookLM Enterprise is invisible to a Gemini Enterprise usage pipeline unless
-two things are understood: it writes to a different log, and that log is off
-until someone turns it on. (Google renamed the product *Gemini Notebook
-Enterprise* in July 2026; the APIs and the log id below keep the old name.)
+NotebookLM writes to a different log, and that log is off until someone turns
+it on. (Google renamed the product *Gemini Notebook Enterprise* in July 2026;
+the APIs and the log id keep the old name.)
 
 **A separate, opt-in log.** NotebookLM records user activity to
-`notebooklm_enterprise_user_activity`, not to the
-`gemini_enterprise_user_activity` log this tool otherwise reads. Logging is
-disabled by default and is enabled for the whole project — unlike the Gemini
-Enterprise observability toggles, which sit on the app or the individual agent.
-Enabling it is a one-time admin action requiring
-`roles/discoveryengine.agentspaceAdmin`; reading it afterwards needs only the
+`notebooklm_enterprise_user_activity`. Logging is disabled by default and is
+enabled for the whole project, unlike the Gemini Enterprise observability
+toggles, which sit on the app or agent. Enabling is a one-time admin action
+requiring `roles/discoveryengine.agentspaceAdmin`; reading needs only the
 `roles/logging.viewer` the tool already uses. Per
 [the setup documentation](https://docs.cloud.google.com/gemini/enterprise/notebooklm-enterprise/docs/set-up-usage-audit-logs-for-nblme):
 
@@ -508,30 +494,24 @@ curl -X PATCH \
   }'
 ```
 
-`ENDPOINT_LOCATION` is `us`, `eu` or `global`, matching where the instance
-runs. `sensitiveLoggingEnabled` is what captures prompt text; without it the
-entries record the action but not the question. Nothing is written
-retroactively — history starts when the setting is turned on, so enable it
-well before the numbers are needed.
+`ENDPOINT_LOCATION` is `us`, `eu` or `global`. `sensitiveLoggingEnabled` is
+what captures prompt text. Nothing is written retroactively, so enable it well
+before the numbers are needed.
 
-**What the log carries, and what it cannot.** Entries record the acting
-account, the action (`GenerateFreeFormStreamed` for a chat question,
-`UploadSourceFile`, `CreateNotebook`, sharing, and so on — the documentation
-lists these prefixed with their service, the entries carry the bare method
-name), the notebook, and the prompt for chat-style actions.
-**There are no token counts**, and NotebookLM emits no `gen_ai.usage.*` spans
-into the project's Cloud Trace, so there is no consumption figure to join the
-way chat turns are joined. That is a property of the product's telemetry
-today, not of this tool: any pipeline, BigQuery included, can *count*
-NotebookLM usage but cannot *meter* it.
+**What the log carries.** The acting account, the action
+(`GenerateFreeFormStreamed` for a chat question, `UploadSourceFile`,
+`CreateNotebook`, sharing; the documentation lists these prefixed with their
+service, the entries carry the bare name), the notebook, and the prompt for
+chat-style actions. **There are no token counts**, and NotebookLM emits no
+`gen_ai.usage.*` spans into Cloud Trace. Any pipeline, BigQuery included, can
+*count* NotebookLM usage but cannot *meter* it.
 
-The tool keeps NotebookLM in its own lane accordingly. `collect` pulls the log
-on every run — a project that never enabled it simply contributes nothing —
-rows land in `notebooklm_activity`, and reporting is activity-based: the
-`notebooklm_by_user` view, a section in `stats`, and two dashboard cards that
-appear when data exists (the per-user rollup, and the most recent actions with
-their prompts; `--redact-queries` strips those prompts like any other). No
-token figure anywhere in the tool is affected by any of it.
+`collect` pulls the log on every run (a project that never enabled it
+contributes nothing), rows land in `notebooklm_activity`, and reporting is
+activity-based: the `notebooklm_by_user` view, a section in `stats`, and two
+dashboard cards, the per-user rollup and the most recent actions with their
+prompts. `--redact-queries` strips those prompts like any other. No token
+figure in the tool is affected by any of it.
 
 ---
 
@@ -556,7 +536,7 @@ One row per model call. The primary reporting view.
 | `trace_id`, `span_id` | Correlation identifiers |
 | `user_principal` | Signed-in account, or `(unattributed)` |
 | `attributed` | `1` if resolved to a named account, otherwise `0` |
-| `attributed_via` | `trace`, `session`, or NULL — which key resolved it |
+| `attributed_via` | `trace`, `session`, or NULL: the key that resolved it |
 | `query_text` | Prompt text, where available |
 | `agent`, `engine`, `session_id` | Routing context |
 | `agent_group` | `agent`, with the Deep Research fan-out folded into one entity |
@@ -573,15 +553,13 @@ token totals, average per call, and first and last activity timestamps.
 ### View: `usage_by_agent`
 
 Per agent and surface: calls, turns, attributed calls split by method
-(`via_trace` / `via_session`), token totals, and first and last activity. This
-is where a partially-attributed agent, such as Deep Research on a version of
-the platform that leaves its sub-agents unlinked, shows up as such.
+(`via_trace` / `via_session`), token totals, and first and last activity. A
+partially-attributed agent such as Deep Research shows up as such here.
 
 ### View: `notebooklm_by_user`
 
 Per account: activity count, distinct notebooks, active days, first and last
-seen. Deliberately separate from the token views — there are no token numbers
-to join it to.
+seen. Separate from the token views; there are no token numbers to join it to.
 
 All timestamps are **UTC**.
 
@@ -617,14 +595,12 @@ month, or a handful of users driving heavily-grounded agents.
 
 - **30-day retention.** Cloud Trace and the `_Default` log bucket both drop
   records after 30 days, so nothing older can be collected retrospectively.
-- **Attribution** is bounded by the identifiers the platform stamps — trace id,
-  and session id where present — not by this tool. See
-  [section 11](#11-attribution-coverage).
-- **NotebookLM has no token counts, anywhere.** Its activity log records who
-  did what, and nothing NotebookLM does emits `gen_ai.usage.*` spans into the
-  project's Cloud Trace. Activity is the most any pipeline can report for it,
-  and only after its logging has been enabled. See
-  [NotebookLM Enterprise](#12-notebooklm-enterprise).
+- **Attribution** is bounded by the identifiers the platform stamps (trace id,
+  session id), not by this tool. See [section 11](#11-attribution-coverage).
+- **NotebookLM has no token counts, anywhere.** Its log records who did what,
+  and it emits no `gen_ai.usage.*` spans into Cloud Trace. Activity is the
+  most any pipeline can report for it, and only after its logging is enabled.
+  See [NotebookLM Enterprise](#12-notebooklm-enterprise).
 - **Cloud Trace sampling.** If a project samples traces, token counts reflect the
   sampled population. This tool reports what the APIs return.
 
@@ -689,16 +665,14 @@ part.
 - **Feed an existing observability stack.** If Splunk, Elastic or Datadog is
   already the internal surface, emit the joined rows there instead of rendering
   HTML. The join is the value, not the charts.
-- **Close the attribution gap.** Propagate W3C `traceparent` from Gemini Enterprise
-  into your custom agents so their spans share the trace id of the originating
-  turn — or have the agent stamp the Gemini Enterprise session on its spans'
-  `gen_ai.conversation.id`, which the session join picks up. Either way, every
+- **Close the attribution gap.** Propagate W3C `traceparent` from Gemini
+  Enterprise into your custom agents, or have the agent stamp the Gemini
+  Enterprise session on its spans' `gen_ai.conversation.id`. Either way, every
   Agent Engine call resolves to a named user with no change to this tool. Two
-  more identifiers to watch as the platform's telemetry evolves: ADK 2.1's
-  content-capture opt-in records a `user.id` field on the agent's own
-  telemetry, and StreamAssist tool spans carry a documented
-  `gemini_enterprise.assist_token` attribute — so far observed only inside the
-  request trace, where the trace join already resolves everything.
+  identifiers to watch: ADK 2.1's content-capture opt-in records `user.id`,
+  and StreamAssist tool spans carry a documented
+  `gemini_enterprise.assist_token` attribute, so far seen only inside the
+  request trace, where the trace join already wins.
 - **Alerting.** `query` returns a shell-friendly exit and CSV; a threshold check on
   a schedule is a few lines of cron.
 - **Host the dashboard.** `serve` already binds `127.0.0.1`. Putting it behind an
@@ -746,9 +720,8 @@ gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 **Collection returns 0 turns**
 Confirm the project serves Gemini Enterprise traffic and that the window covers a
 period with activity. Widen it with `--days 30`. Data older than 30 days is gone.
-User activity is only logged while the app's observability settings are on (for
-Deep Research and other managed agents, the toggle sits on the agent itself); if
-they were off during the window, there is nothing to collect.
+User activity is only logged while the observability settings are on (for managed
+agents such as Deep Research, the toggle sits on the agent itself).
 
 **Collection returns turns but 0 model calls**
 Cloud Trace may not be enabled, or no traced model calls occurred in the window:
@@ -762,10 +735,10 @@ Expected when traffic is routed to custom agents. See
 [Attribution coverage](#11-attribution-coverage).
 
 **NotebookLM shows 0 activities**
-Its logging is off by default; nothing is written retroactively once enabled,
-so history starts at the moment it is switched on. See
-[NotebookLM Enterprise](#12-notebooklm-enterprise). If it has been on and the
-window covers real usage, confirm the account can read the log:
+Its logging is off by default and records nothing retroactively; history starts
+when it is switched on. See
+[NotebookLM Enterprise](#12-notebooklm-enterprise). If it is on and the window
+covers real usage, confirm the account can read the log:
 
 ```bash
 gcloud logging read 'logName:"notebooklm_enterprise_user_activity"' --limit 5
@@ -806,10 +779,10 @@ Delete `usage.db` and re-run `collect`. Nothing in Google Cloud is affected.
    entries, producing `notebooklm_activity` rows keyed by insert id. A project
    that has not enabled that logging simply matches nothing.
 
-5. **Everything is written with `INSERT OR REPLACE`**, which is what makes
-   repeated runs idempotent. The `usage` view then joins model calls to turns on
-   trace id, falling back to session id, at query time — so a turn collected in a
-   later run than its spans still attributes them.
+5. **Everything is written with `INSERT OR REPLACE`**, which makes repeated
+   runs idempotent. The `usage` view joins model calls to turns on trace id,
+   falling back to session id, at query time, so a turn collected later than
+   its spans still attributes them.
 
 ### Source files
 
