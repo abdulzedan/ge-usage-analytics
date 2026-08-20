@@ -190,6 +190,101 @@ def test_collect_turns_deduplicates_by_trace_id():
 
 
 # ---------------------------------------------------------------------------
+# Cloud Logging: NotebookLM Enterprise
+# ---------------------------------------------------------------------------
+
+
+def test_build_notebooklm_log_filter_targets_the_notebooklm_log():
+    f = collector.build_notebooklm_log_filter("example-project")
+    assert 'logName="projects/example-project/logs/' in f
+    assert "notebooklm_enterprise_user_activity" in f
+    assert "methodName" not in f  # every recorded action is kept
+
+
+def _notebooklm_entry(**overrides):
+    entry = {
+        "insertId": "nblm-1",
+        "timestamp": "2026-07-01T09:30:00.123456789Z",
+        "resource": {"labels": {"location": "global"}},
+        "jsonPayload": {
+            "userIamPrincipal": "dana@example.com",
+            "logMetadata": {
+                "methodName": "NotebookService.GenerateFreeFormStreamed",
+            },
+            "request": {
+                "name": "projects/1234/locations/global/notebooks/nb-77",
+                "userQuery": "Summarise the uploaded contracts.",
+            },
+        },
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_parse_notebooklm_activity_extracts_identity_action_and_prompt():
+    row = collector.parse_notebooklm_activity(_notebooklm_entry())
+    assert row == {
+        "insert_id": "nblm-1",
+        "ts": "2026-07-01T09:30:00",
+        "user_principal": "dana@example.com",
+        "action": "NotebookService.GenerateFreeFormStreamed",
+        "notebook_id": "nb-77",
+        "query_text": "Summarise the uploaded contracts.",
+        "location": "global",
+    }
+
+
+def test_parse_notebooklm_activity_accepts_the_snake_case_spelling():
+    """Proto field names surface as camelCase in Cloud Logging; accept both."""
+    entry = _notebooklm_entry()
+    entry["jsonPayload"]["request"] = {"user_query": "What changed in v2?"}
+    assert collector.parse_notebooklm_activity(entry)["query_text"] == "What changed in v2?"
+
+
+def test_parse_notebooklm_activity_without_a_prompt_yields_none():
+    entry = _notebooklm_entry()
+    entry["jsonPayload"]["logMetadata"]["methodName"] = "SourceService.UploadSourceFile"
+    entry["jsonPayload"]["request"] = {
+        "parent": "projects/1234/notebooks/nb-77",
+        "blob": {"filename": "contract.pdf"},
+    }
+    row = collector.parse_notebooklm_activity(entry)
+    assert row["action"] == "SourceService.UploadSourceFile"
+    assert row["query_text"] is None
+    assert row["notebook_id"] == "nb-77"
+
+
+def test_parse_notebooklm_activity_requires_an_insert_id():
+    assert collector.parse_notebooklm_activity(_notebooklm_entry(insertId=None)) is None
+
+
+def test_parse_notebooklm_activity_tolerates_a_sparse_payload():
+    row = collector.parse_notebooklm_activity({"insertId": "x", "jsonPayload": {}})
+    assert row["insert_id"] == "x"
+    assert row["user_principal"] is None
+    assert row["action"] is None
+    assert row["notebook_id"] is None
+
+
+def test_collect_notebooklm_activity_windows_dedupes_and_drops_anonymous_entries():
+    anonymous = _notebooklm_entry(insertId="nblm-2")
+    anonymous["jsonPayload"] = dict(anonymous["jsonPayload"], userIamPrincipal=None)
+    client = _FakeClient(entries=[_notebooklm_entry(), _notebooklm_entry(), anonymous])
+
+    rows = collector.collect_notebooklm_activity(
+        client,
+        start=dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc),
+        end=dt.datetime(2026, 7, 8, tzinfo=dt.timezone.utc),
+    )
+
+    assert [r["insert_id"] for r in rows] == ["nblm-1"]
+    sent = client.log_filters[0]
+    assert "notebooklm_enterprise_user_activity" in sent
+    assert 'timestamp>="2026-07-01T00:00:00Z"' in sent
+    assert 'timestamp<="2026-07-08T00:00:00Z"' in sent
+
+
+# ---------------------------------------------------------------------------
 # Cloud Trace
 # ---------------------------------------------------------------------------
 

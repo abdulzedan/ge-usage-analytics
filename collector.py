@@ -10,8 +10,11 @@ Neither source is sufficient on its own:
   `gen_ai.request.model` as span labels. They carry no user identity.
 
 Both stamp the same W3C trace id, so joining on it reconstructs
-user -> prompt -> model -> tokens. This module performs that join in memory and
-writes the result to local SQLite.
+user -> prompt -> model -> tokens. Where a turn spawns work under fresh trace
+ids -- each Deep Research sub-agent runs one -- the `gen_ai.conversation.id`
+label on those spans is the remaining exact link back to the session, and the
+session's turns name the account. This module collects and parses both sides;
+the join itself is the `usage` view in store.py.
 """
 
 from __future__ import annotations
@@ -27,9 +30,18 @@ USER_ACTIVITY_LOG = (
     "discoveryengine.googleapis.com%2Fgemini_enterprise_user_activity"
 )
 
+# NotebookLM Enterprise writes to its own log, not to the one above, and only
+# after user-activity logging has been switched on for the project. Entries
+# record who did what, and the prompt for chat-style actions. They carry no
+# token counts, and no other surface exposes NotebookLM token consumption.
+NOTEBOOKLM_ACTIVITY_LOG = (
+    "discoveryengine.googleapis.com%2Fnotebooklm_enterprise_user_activity"
+)
+
 _ENGINE_RE = re.compile(r"engines/([^/]+)")
 _SESSION_RE = re.compile(r"sessions/([^/]+)")
 _AGENT_RE = re.compile(r"agents/([^/]+)")
+_NOTEBOOK_RE = re.compile(r"notebooks/([^/]+)")
 
 
 # --------------------------------------------------------------------------
@@ -141,6 +153,82 @@ def collect_turns(
         row = parse_turn(entry)
         if row and row.get("user_principal"):
             rows[row["trace_id"]] = row
+    return list(rows.values())
+
+
+# --------------------------------------------------------------------------
+# Cloud Logging -> notebooklm_activity
+# --------------------------------------------------------------------------
+
+
+def build_notebooklm_log_filter(project: str) -> str:
+    """Filter for NotebookLM Enterprise user-activity entries.
+
+    No method filter: unlike chat turns, every recorded action is of interest
+    (queries, source uploads, sharing, audio overviews), and the method name is
+    stored as the row's `action`.
+    """
+    return f'logName="projects/{project}/logs/{NOTEBOOKLM_ACTIVITY_LOG}"'
+
+
+def parse_notebooklm_activity(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one NotebookLM user-activity log entry to a `notebooklm_activity` row.
+
+    The log shares its envelope with the Gemini Enterprise one (same service
+    prefix, same `userIamPrincipal`), but there is no trace to join on and no
+    token fields to read: activity is all it records.
+    """
+    insert_id = entry.get("insertId")
+    if not insert_id:
+        return None
+
+    payload = entry.get("jsonPayload") or {}
+    log_meta = payload.get("logMetadata") or {}
+    request = payload.get("request") or {}
+
+    # Chat-style actions carry the question (`user_query` on
+    # GenerateFreeFormStreamed, `free_form_action` on InteractSources);
+    # management actions carry none. Both key spellings are accepted because
+    # Cloud Logging renders proto fields in camelCase.
+    query_text = None
+    for key in ("userQuery", "user_query", "freeFormAction", "free_form_action"):
+        value = request.get(key)
+        if isinstance(value, str) and value:
+            query_text = value
+            break
+
+    return {
+        "insert_id": insert_id,
+        "ts": _sortable(entry.get("timestamp") or log_meta.get("timestamp")),
+        "user_principal": payload.get("userIamPrincipal"),
+        "action": log_meta.get("methodName"),
+        "notebook_id": _first(
+            _NOTEBOOK_RE, log_meta.get("name"), request.get("name"), request.get("parent")
+        ),
+        "query_text": query_text,
+        "location": ((entry.get("resource") or {}).get("labels") or {}).get("location"),
+    }
+
+
+def collect_notebooklm_activity(
+    client: GcpClient, *, start: dt.datetime, end: dt.datetime
+) -> list[dict[str, Any]]:
+    """Collect NotebookLM Enterprise activity, keyed by insert id.
+
+    When the project has not enabled NotebookLM user-activity logging (it is
+    off by default) the filter simply matches nothing; that is not an error.
+    """
+    log_filter = build_notebooklm_log_filter(client.project)
+    log_filter += (
+        f' AND timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+        f' AND timestamp<="{end.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+    )
+
+    rows: dict[str, dict[str, Any]] = {}
+    for entry in client.iter_log_entries(log_filter):
+        row = parse_notebooklm_activity(entry)
+        if row and row.get("user_principal"):
+            rows[row["insert_id"]] = row
     return list(rows.values())
 
 
