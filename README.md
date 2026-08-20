@@ -528,9 +528,10 @@ NotebookLM usage but cannot *meter* it.
 The tool keeps NotebookLM in its own lane accordingly. `collect` pulls the log
 on every run — a project that never enabled it simply contributes nothing —
 rows land in `notebooklm_activity`, and reporting is activity-based: the
-`notebooklm_by_user` view, a section in `stats`, and a dashboard card that
-appears when data exists. No token figure anywhere in the tool is affected by
-any of it.
+`notebooklm_by_user` view, a section in `stats`, and two dashboard cards that
+appear when data exists (the per-user rollup, and the most recent actions with
+their prompts; `--redact-queries` strips those prompts like any other). No
+token figure anywhere in the tool is affected by any of it.
 
 ---
 

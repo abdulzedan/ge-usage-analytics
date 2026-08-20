@@ -156,14 +156,36 @@ def test_notebooklm_rollup_is_embedded_and_counted(conn):
     assert entry["u"] == "dana@example.com"
     assert entry["n"] == 1
     assert "1 NotebookLM activities" in html
-    # Only the rollup travels; NotebookLM prompt text never reaches the page.
+
+    (recent,) = payload["notebooklmRecent"]
+    assert recent["ac"] == "GenerateFreeFormStreamed"
+    assert recent["nb"] == "nb-1"
+    assert recent["q"] == "secret prompt"
+
+
+def test_redaction_covers_notebooklm_prompts_too(conn):
+    store.upsert_notebooklm_activity(
+        conn,
+        [
+            {"insert_id": "n1", "ts": "2026-07-01T09:00:00",
+             "user_principal": "dana@example.com",
+             "action": "GenerateFreeFormStreamed",
+             "notebook_id": "nb-1", "query_text": "secret prompt"},
+        ],
+    )
+    html = render_dashboard(conn, project="example-project", redact_queries=True)
+
     assert "secret prompt" not in html
+    (recent,) = _payload(html)["notebooklmRecent"]
+    assert recent["q"] is None
+    assert recent["ac"] == "GenerateFreeFormStreamed"  # the action itself stays
 
 
 def test_without_notebooklm_data_the_payload_and_subtitle_stay_quiet(conn):
     html = render_dashboard(conn, project="example-project")
 
     assert _payload(html)["notebooklm"] == []
+    assert _payload(html)["notebooklmRecent"] == []
     assert "NotebookLM activities" not in html
 
 

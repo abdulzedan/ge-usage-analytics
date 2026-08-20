@@ -111,7 +111,8 @@ jobs:
         run: |
           python ge_usage.py --db demo.db dashboard \
             --out redacted.html --project ci --redact-queries
-          if grep -q "status of order 4471" redacted.html; then
+          # One chat prompt and one NotebookLM prompt from the demo data.
+          if grep -q -e "status of order 4471" -e "quarterly claim reports" redacted.html; then
             echo "::error::prompt text survived --redact-queries"
             exit 1
           fi

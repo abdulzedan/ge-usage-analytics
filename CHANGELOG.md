@@ -28,9 +28,11 @@ minority of its model calls, and NotebookLM Enterprise did not appear at all.
   `notebooklm_enterprise_user_activity` log — a separate log from the Gemini
   Enterprise one, off by default and enabled per project — into a
   `notebooklm_activity` table with a `notebooklm_by_user` rollup, surfaced in
-  `stats` and as a dashboard card. Its entries record who did what, and the
-  prompt for chat actions, but no token counts exist for NotebookLM on any
-  surface, so it is reported as activity and never mixed into token figures.
+  `stats` and as dashboard cards (per-user rollup, plus the most recent
+  actions with their prompts, which `--redact-queries` strips). Its entries
+  record who did what, and the prompt for chat actions, but no token counts
+  exist for NotebookLM on any surface, so it is reported as activity and never
+  mixed into token figures.
 - The demo generator produces both new populations, so the behaviour is
   visible without a Google Cloud project.
 - `agent_group` on the `usage` view, folding Deep Research's planner and

@@ -279,6 +279,12 @@ _TEMPLATE = r"""<!doctype html>
     <div class="tablewrap" id="tableNblm"></div>
   </div>
 
+  <div class="card hidden" id="cardNblmRecent">
+    <header><h2>Recent NotebookLM actions</h2></header>
+    <p class="desc">Newest first. Chat-style actions carry the question that was asked.</p>
+    <div class="tablewrap" id="tableNblmRecent"></div>
+  </div>
+
   <footer class="note">
     <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user identity, prompt)
     joined to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts) — on trace id,
@@ -766,6 +772,17 @@ if (DATA.notebooklm.length) {
     { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
   ], DATA.notebooklm);
 }
+if (DATA.notebooklmRecent.length) {
+  $("cardNblmRecent").classList.remove("hidden");
+  renderTable("tableNblmRecent", [
+    { label: "Time (UTC)", get: (r) => (r.t || "").replace("T", " ") },
+    { label: "User", get: (r) => r.u },
+    { label: "Action", get: (r) => r.ac },
+    { label: "Notebook", get: (r) => r.nb || "—" },
+    { label: "Prompt", html: true,
+      get: (r) => `<span class="q" title="${esc(r.q || "")}">${esc(r.q || "—")}</span>` },
+  ], DATA.notebooklmRecent);
+}
 
 document.querySelectorAll(".toggle").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -855,8 +872,6 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             text = r["query_text"].strip().replace("\n", " ")
             queries[r["trace_id"]] = text[:300]
 
-    # Per-user rollup only: activity counts belong on the dashboard, prompt text
-    # does not need to travel with them.
     notebooklm = [
         {
             "u": r["user_principal"],
@@ -868,7 +883,27 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
         for r in conn.execute("SELECT * FROM notebooklm_by_user ORDER BY activities DESC")
     ]
 
-    return {"rows": rows, "queries": queries, "notebooklm": notebooklm}
+    notebooklm_recent = [
+        {
+            "t": r["ts"],
+            "u": r["user_principal"],
+            "ac": r["action"],
+            "nb": r["notebook_id"],
+            "q": (
+                None
+                if redact or not r["query_text"]
+                else r["query_text"].strip().replace("\n", " ")[:300]
+            ),
+        }
+        for r in conn.execute("SELECT * FROM notebooklm_activity ORDER BY ts DESC LIMIT 200")
+    ]
+
+    return {
+        "rows": rows,
+        "queries": queries,
+        "notebooklm": notebooklm,
+        "notebooklmRecent": notebooklm_recent,
+    }
 
 
 def render_dashboard(
