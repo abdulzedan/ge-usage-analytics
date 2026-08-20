@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS meta (
 #
 # A call matching neither key stays unattributed; nothing is inferred from time
 # proximity across sessions.
+#
+# The "latest at-or-before, else earliest" preference is spelled as a COALESCE
+# of two subqueries on purpose: only very recent SQLite builds resolve outer
+# references inside a subquery's ORDER BY, and a single subquery ordering on
+# `CASE WHEN t2.ts <= mc.start_time ...` fails with "no such column:
+# mc.start_time" everywhere else (Ubuntu's and Apple's bundled builds
+# included). Outer references in a subquery's WHERE work in every build.
 VIEWS = """
 DROP VIEW IF EXISTS usage;
 CREATE VIEW usage AS
@@ -137,18 +144,23 @@ SELECT
     m.output_tokens                                     AS output_tokens,
     m.input_tokens + m.output_tokens                    AS total_tokens,
     m.latency_ms                                        AS latency_ms
-FROM model_calls m
+FROM (
+    SELECT mc.*,
+           COALESCE(
+               (SELECT t2.trace_id FROM turns t2
+                 WHERE mc.session_id IS NOT NULL AND mc.session_id != '-'
+                   AND t2.session_id = mc.session_id
+                   AND t2.ts <= mc.start_time
+                 ORDER BY t2.ts DESC LIMIT 1),
+               (SELECT t2.trace_id FROM turns t2
+                 WHERE mc.session_id IS NOT NULL AND mc.session_id != '-'
+                   AND t2.session_id = mc.session_id
+                 ORDER BY t2.ts LIMIT 1)
+           )                                            AS session_trace
+    FROM model_calls mc
+) m
 LEFT JOIN turns t ON t.trace_id = m.trace_id
-LEFT JOIN turns s ON t.trace_id IS NULL AND s.trace_id = (
-    SELECT t2.trace_id
-    FROM turns t2
-    WHERE m.session_id IS NOT NULL AND m.session_id != '-'
-      AND t2.session_id = m.session_id
-    ORDER BY CASE WHEN t2.ts <= m.start_time THEN 0 ELSE 1 END,
-             CASE WHEN t2.ts <= m.start_time THEN t2.ts END DESC,
-             t2.ts
-    LIMIT 1
-);
+LEFT JOIN turns s ON t.trace_id IS NULL AND s.trace_id = m.session_trace;
 
 DROP VIEW IF EXISTS usage_by_user;
 CREATE VIEW usage_by_user AS
