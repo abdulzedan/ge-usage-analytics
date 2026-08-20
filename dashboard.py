@@ -113,6 +113,7 @@ _TEMPLATE = r"""<!doctype html>
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .tile .label { font-size: 12px; color: var(--text-secondary); }
   .tile .value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
+  .tile .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
 
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 16px; }
   .card {
@@ -269,14 +270,24 @@ _TEMPLATE = r"""<!doctype html>
     <div class="tablewrap" id="tableRecent"></div>
   </div>
 
+  <div class="card hidden" id="cardNblm">
+    <header><h2>NotebookLM Enterprise activity</h2></header>
+    <p class="desc">From the NotebookLM Enterprise activity log: action counts only, over the whole
+    collected window. The log carries no token data, so nothing here contributes to the token
+    figures above, and the filter row does not apply.</p>
+    <div class="tablewrap" id="tableNblm"></div>
+  </div>
+
   <footer class="note">
     <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user identity, prompt)
-    joined on trace id to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts).
+    joined to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts) — on trace id,
+    or on session id where a call ran under its own trace but its spans name the session.
     Times are UTC.</p>
     <p><strong>On attribution.</strong> Gemini Enterprise stamps its trace id on the
-    <code>StreamAssist</code> log entry, so core-assistant turns carry a named user. A turn routed
-    to a custom agent (ADK on Agent Engine, or A2A on Cloud Run) executes under that agent's own
-    trace id, so its tokens appear under the <em>Agent Engine</em> surface with no end user attached.
+    <code>StreamAssist</code> log entry, so core-assistant turns carry a named user. Work a turn
+    spawns under fresh trace ids — each Deep Research sub-agent runs one — is recovered through the
+    session id its spans carry. A custom agent (ADK on Agent Engine, or A2A on Cloud Run) that
+    stamps neither appears under the <em>Agent Engine</em> surface with no end user attached.
     Filter by surface to see each population on its own. This split is platform behaviour, not an
     artefact of how the numbers were collected.</p>
   </footer>
@@ -614,6 +625,7 @@ function render() {
   $("fCount").textContent = `${num(rows.length)} model calls · ${num(traces.size)} turns`;
 
   const attributed = rows.filter((r) => r.at).length;
+  const viaSession = rows.filter((r) => r.v === "s").length;
   const namedUsers = new Set(rows.filter((r) => r.at).map((r) => r.u));
   const tiles = [
     ["Named users", num(namedUsers.size)],
@@ -624,10 +636,12 @@ function render() {
     ["Output tokens", num(totalOut)],
     ["Avg tokens / turn", traces.size ? num(Math.round((totalIn + totalOut) / traces.size)) : "—"],
     ["User-attributed calls",
-     rows.length ? `${num(attributed)} (${Math.round(attributed / rows.length * 100)}%)` : "—"],
+     rows.length ? `${num(attributed)} (${Math.round(attributed / rows.length * 100)}%)` : "—",
+     viaSession ? `${num(attributed - viaSession)} via trace · ${num(viaSession)} via session` : ""],
   ];
-  $("kpis").innerHTML = tiles.map(([l, v]) =>
-    `<div class="tile"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("");
+  $("kpis").innerHTML = tiles.map(([l, v, sub]) =>
+    `<div class="tile"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div>`
+    + (sub ? `<div class="sub">${esc(sub)}</div>` : "") + `</div>`).join("");
 
   legend("legendDaily", [{ color: c1, label: "Input tokens" }, { color: c2, label: "Output tokens" }]);
   legend("legendUser", [{ color: c1, label: "Input tokens" }, { color: c2, label: "Output tokens" }]);
@@ -743,6 +757,19 @@ fillSelect("fAgent", [...new Set(DATA.rows.map((r) => r.a || "(none)"))].sort())
 ["fRange", "fSurface", "fUser", "fModel", "fAgent"]
   .forEach((id) => $(id).addEventListener("change", render));
 
+/* NotebookLM activity is a separate fact with no tokens and no trace ids, so it
+   is rendered once from its own rollup and left out of the filter row's scope. */
+if (DATA.notebooklm.length) {
+  $("cardNblm").classList.remove("hidden");
+  renderTable("tableNblm", [
+    { label: "User", get: (r) => r.u },
+    { label: "Actions", num: true, get: (r) => num(r.n) },
+    { label: "Notebooks", num: true, get: (r) => num(r.b) },
+    { label: "Active days", num: true, get: (r) => num(r.d) },
+    { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
+  ], DATA.notebooklm);
+}
+
 document.querySelectorAll(".toggle").forEach((btn) => {
   btn.addEventListener("click", () => {
     const v = btn.dataset.view;
@@ -816,6 +843,7 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             "s": r["session_id"],
             "f": r["surface"],
             "at": r["attributed"],
+            "v": {"trace": "t", "session": "s"}.get(r["attributed_via"]),
         }
         for r in conn.execute(
             "SELECT * FROM usage WHERE start_time IS NOT NULL ORDER BY start_time DESC"
@@ -830,7 +858,20 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             text = r["query_text"].strip().replace("\n", " ")
             queries[r["trace_id"]] = text[:300]
 
-    return {"rows": rows, "queries": queries}
+    # Per-user rollup only: activity counts belong on the dashboard, prompt text
+    # does not need to travel with them.
+    notebooklm = [
+        {
+            "u": r["user_principal"],
+            "n": r["activities"],
+            "b": r["notebooks"],
+            "d": r["active_days"],
+            "l": r["last_seen"],
+        }
+        for r in conn.execute("SELECT * FROM notebooklm_by_user ORDER BY activities DESC")
+    ]
+
+    return {"rows": rows, "queries": queries, "notebooklm": notebooklm}
 
 
 def render_dashboard(
@@ -848,10 +889,13 @@ def render_dashboard(
     max_time = max((r["t"] for r in rows), default="")
     min_time = min((r["t"] for r in rows), default="")
     turn_count = conn.execute("SELECT COUNT(*) AS c FROM turns").fetchone()["c"]
+    nblm_count = conn.execute("SELECT COUNT(*) AS c FROM notebooklm_activity").fetchone()["c"]
 
     span = f"{min_time.replace('T', ' ')} → {max_time.replace('T', ' ')} UTC" if rows else "no data yet"
     subtitle = (
-        f"Project {project} · {len(rows):,} model calls · {turn_count:,} logged turns · {span}"
+        f"Project {project} · {len(rows):,} model calls · {turn_count:,} logged turns"
+        f"{f' · {nblm_count:,} NotebookLM activities' if nblm_count else ''}"
+        f" · {span}"
         f"{' · generated ' + generated_at if generated_at else ''}"
         " · Cloud Logging + Cloud Trace"
     )

@@ -86,6 +86,67 @@ def test_rows_are_embedded_with_the_joined_user_and_model(conn):
     assert row["o"] == 340
     assert row["f"] == "Gemini Enterprise"
     assert row["at"] == 1
+    assert row["v"] == "t"
+
+
+def test_a_session_attributed_call_is_marked_as_such(conn):
+    store.upsert_turns(
+        conn,
+        [
+            {
+                "trace_id": "trace-a",
+                "ts": "2026-07-01T08:59:00",
+                "user_principal": "dana@example.com",
+                "session_id": "s-1",
+            }
+        ],
+    )
+    store.upsert_model_calls(
+        conn,
+        [
+            {
+                "span_id": "sub:1",
+                "trace_id": "sub",  # no matching turn; session carries the link
+                "start_time": "2026-07-01T09:02:00",
+                "session_id": "s-1",
+                "input_tokens": 10,
+                "output_tokens": 2,
+            }
+        ],
+    )
+    rows = {r["r"]: r for r in _payload(render_dashboard(conn, project="p"))["rows"]}
+
+    assert rows["sub"]["u"] == "dana@example.com"
+    assert rows["sub"]["at"] == 1
+    assert rows["sub"]["v"] == "s"
+
+
+def test_notebooklm_rollup_is_embedded_and_counted(conn):
+    store.upsert_notebooklm_activity(
+        conn,
+        [
+            {"insert_id": "n1", "ts": "2026-07-01T09:00:00",
+             "user_principal": "dana@example.com",
+             "action": "NotebookService.GenerateFreeFormStreamed",
+             "notebook_id": "nb-1", "query_text": "secret prompt"},
+        ],
+    )
+    html = render_dashboard(conn, project="example-project")
+    payload = _payload(html)
+
+    (entry,) = payload["notebooklm"]
+    assert entry["u"] == "dana@example.com"
+    assert entry["n"] == 1
+    assert "1 NotebookLM activities" in html
+    # Only the rollup travels; NotebookLM prompt text never reaches the page.
+    assert "secret prompt" not in html
+
+
+def test_without_notebooklm_data_the_payload_and_subtitle_stay_quiet(conn):
+    html = render_dashboard(conn, project="example-project")
+
+    assert _payload(html)["notebooklm"] == []
+    assert "NotebookLM activities" not in html
 
 
 def test_prompt_text_is_normalised_to_a_single_line(conn):
