@@ -28,6 +28,12 @@ ancestor of a token-bearing span" looks like a simplification and is a bug:
 under agent-as-tool nesting the outer call is a different call, and both sets of
 tokens were really consumed. Four tests pin this down.
 
+**Attribution joins are exact keys only.** A model call is attributed through
+its trace id, or through the session id its spans carry — identifiers the
+platform stamped on the data. Do not add attribution by time proximity or any
+other heuristic: a plausible guess that lands tokens on the wrong person is
+worse than an honest `(unattributed)`.
+
 **Views are rebuilt on every connect; tables are not.** Changing a view needs
 nothing else. Adding a column needs an entry in `_ADDED_COLUMNS` so existing
 databases get it before any view references it.
