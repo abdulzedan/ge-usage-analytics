@@ -283,13 +283,6 @@ _TEMPLATE = r"""<!doctype html>
     joined to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts) — on trace id,
     or on session id where a call ran under its own trace but its spans name the session.
     Times are UTC.</p>
-    <p><strong>On attribution.</strong> Gemini Enterprise stamps its trace id on the
-    <code>StreamAssist</code> log entry, so calls that execute inside the request trace carry a
-    named user. A call under its own trace resolves only if its spans carry the Gemini Enterprise
-    session id. Deep Research's detached sub-agent calls currently carry neither key, and a custom
-    agent (ADK on Agent Engine, or A2A on Cloud Run) carries none unless it stamps one — so those
-    appear with no end user attached. Filter by surface or agent to see each population on its
-    own. This split is platform behaviour, not an artefact of how the numbers were collected.</p>
   </footer>
 </div>
 
