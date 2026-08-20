@@ -3,6 +3,34 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] 2026-08-20
+
+Driven by a live 30-day run: Deep Research resolved to a named user for only a
+minority of its model calls, and NotebookLM Enterprise did not appear at all.
+
+### Added
+
+- Session-id attribution. A model call whose trace id matches no logged turn is
+  now resolved through the session its spans carry (`gen_ai.conversation.id`)
+  before being declared unattributed. Deep Research is the population this
+  recovers: the request logs one StreamAssist turn, the planner call shares its
+  trace, and each research sub-agent runs under a trace of its own but keeps the
+  session. Both joins are exact keys; nothing is ever attributed by time
+  proximity.
+- `attributed_via` on the `usage` view (`trace`, `session`, or NULL) and a
+  `usage_by_agent` view splitting each agent's calls by attribution method, so a
+  partially-attributed agent is visible as such instead of quietly inflating the
+  unattributed bucket. `collect` prints the same split.
+- NotebookLM Enterprise collection. `collect` reads the
+  `notebooklm_enterprise_user_activity` log — a separate log from the Gemini
+  Enterprise one, off by default and enabled per project — into a
+  `notebooklm_activity` table with a `notebooklm_by_user` rollup, surfaced in
+  `stats` and as a dashboard card. Its entries record who did what, and the
+  prompt for chat actions, but no token counts exist for NotebookLM on any
+  surface, so it is reported as activity and never mixed into token figures.
+- The demo generator produces both new populations, so the behaviour is
+  visible without a Google Cloud project.
+
 ## [1.0.0] 2026-07-26
 
 First stable release.
@@ -40,4 +68,5 @@ calls from custom agents arrive without a user, because Gemini Enterprise does
 not propagate trace context into them; token totals are unaffected. Cloud Trace
 and the `_Default` log bucket retain 30 days. See the README.
 
+[1.1.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.1.0
 [1.0.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.0.0

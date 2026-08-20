@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ge-usage-analytics"
-version = "1.0.0"
+version = "1.1.0"
 description = "Export Gemini Enterprise token and activity telemetry out of Google Cloud into a local SQLite database and an offline HTML dashboard."
 readme = "README.md"
 requires-python = ">=3.9"
