@@ -165,6 +165,31 @@ def test_stats_prints_a_row_per_user(db, capsys):
     assert "TOTAL (1 users)" in out
 
 
+def test_stats_appends_notebooklm_activity_when_present(db, capsys):
+    conn = store.connect(db)
+    store.upsert_notebooklm_activity(
+        conn,
+        [{"insert_id": "n1", "ts": "2026-07-02T10:00:00",
+          "user_principal": "dana@example.com",
+          "action": "NotebookService.GenerateFreeFormStreamed",
+          "notebook_id": "nb-1"}],
+    )
+    conn.close()
+
+    rc = ge_usage.cmd_stats(argparse.Namespace(db=db))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "NotebookLM Enterprise" in out
+    assert "no token counts" in out
+    assert "2026-07-02T10:00:00" in out
+
+
+def test_stats_stays_quiet_without_notebooklm_data(db, capsys):
+    ge_usage.cmd_stats(argparse.Namespace(db=db))
+    assert "NotebookLM" not in capsys.readouterr().out
+
+
 def test_stats_on_an_empty_database_reports_no_data(tmp_path, capsys):
     path = str(tmp_path / "empty.db")
     store.connect(path).close()
@@ -303,7 +328,7 @@ def test_sql_shell_reports_a_missing_sqlite3_binary(db, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_collect_writes_both_sources_and_summarises(tmp_path, monkeypatch, capsys):
+def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys):
     path = str(tmp_path / "new.db")
 
     monkeypatch.setattr(ge_usage, "GcpClient", lambda project: object())
@@ -331,6 +356,19 @@ def test_collect_writes_both_sources_and_summarises(tmp_path, monkeypatch, capsy
             [{"span_id": "trace-a:2", "trace_id": "trace-a", "tool_name": "lookup_order"}],
         ),
     )
+    monkeypatch.setattr(
+        ge_usage.collector,
+        "collect_notebooklm_activity",
+        lambda client, *, start, end: [
+            {
+                "insert_id": "n1",
+                "ts": "2026-07-01T10:00:00",
+                "user_principal": "dana@example.com",
+                "action": "NotebookService.GenerateFreeFormStreamed",
+                "notebook_id": "nb-1",
+            }
+        ],
+    )
 
     rc = ge_usage.cmd_collect(
         argparse.Namespace(
@@ -344,11 +382,14 @@ def test_collect_writes_both_sources_and_summarises(tmp_path, monkeypatch, capsy
     assert "1 turns · 1 distinct users" in out
     assert "1 model calls · 1 tool calls" in out
     assert "1,200 input tokens · 340 output tokens" in out
+    assert "1 activities · 1 distinct users (no token data exists)" in out
     assert "Gemini Enterprise" in out
     assert "attributed to a user: 1/1 model calls (100.0%)" in out
+    assert "1 via trace id · 0 via session id" in out
 
     conn = store.connect(path)
     assert conn.execute("SELECT COUNT(*) c FROM usage").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM notebooklm_activity").fetchone()["c"] == 1
     assert store.get_meta(conn, "project") == "example-project"
     assert store.get_meta(conn, "last_collect_utc") is not None
     conn.close()
@@ -378,6 +419,9 @@ def test_collect_explains_a_shortfall_in_attribution(tmp_path, monkeypatch, caps
             [],
         ),
     )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
+    )
 
     ge_usage.cmd_collect(
         argparse.Namespace(
@@ -389,6 +433,51 @@ def test_collect_explains_a_shortfall_in_attribution(tmp_path, monkeypatch, caps
 
     assert "attributed to a user: 0/1 model calls (0.0%)" in out
     assert "own trace id" in out
+    # Nothing collected from NotebookLM points at the off-by-default logging.
+    assert "off by default" in out
+
+
+def test_collect_reports_the_session_recoveries_separately(tmp_path, monkeypatch, capsys):
+    path = str(tmp_path / "new.db")
+
+    monkeypatch.setattr(ge_usage, "GcpClient", lambda project: object())
+    monkeypatch.setattr(
+        ge_usage.collector,
+        "collect_turns",
+        lambda client, **kw: [
+            {"trace_id": "trace-a", "ts": "2026-07-01T08:59:00",
+             "user_principal": "dana@example.com", "session_id": "s-1"}
+        ],
+    )
+    monkeypatch.setattr(
+        ge_usage.collector,
+        "collect_spans",
+        lambda client, **kw: (
+            [
+                {"span_id": "trace-a:1", "trace_id": "trace-a",
+                 "start_time": "2026-07-01T09:00:00", "session_id": "s-1",
+                 "input_tokens": 10, "output_tokens": 2},
+                {"span_id": "sub:1", "trace_id": "sub",
+                 "start_time": "2026-07-01T09:01:00", "session_id": "s-1",
+                 "input_tokens": 40, "output_tokens": 4},
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
+    )
+
+    ge_usage.cmd_collect(
+        argparse.Namespace(
+            db=path, project="example-project", days=7,
+            since=None, engine_id=None, trace_filter=None,
+        )
+    )
+    out = capsys.readouterr().out
+
+    assert "attributed to a user: 2/2 model calls (100.0%)" in out
+    assert "1 via trace id · 1 via session id" in out
 
 
 def test_collect_accepts_an_explicit_start_time(tmp_path, monkeypatch, capsys):
@@ -401,6 +490,9 @@ def test_collect_accepts_an_explicit_start_time(tmp_path, monkeypatch, capsys):
         lambda client, *, start, end, engine_id: seen.update(start=start) or [],
     )
     monkeypatch.setattr(ge_usage.collector, "collect_spans", lambda client, **kw: ([], []))
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
+    )
 
     ge_usage.cmd_collect(
         argparse.Namespace(
@@ -423,6 +515,9 @@ def test_collect_applies_the_default_trace_filters(tmp_path, monkeypatch):
         ge_usage.collector,
         "collect_spans",
         lambda client, *, start, end, trace_filters: seen.update(f=trace_filters) or ([], []),
+    )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
     )
 
     ge_usage.cmd_collect(

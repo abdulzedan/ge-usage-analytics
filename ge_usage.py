@@ -89,7 +89,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     client = GcpClient(project)
     conn = store.connect(args.db)
 
-    print("\n[1/2] Cloud Logging: chat turns and user identity …", flush=True)
+    print("\n[1/3] Cloud Logging: chat turns and user identity …", flush=True)
     turns = collector.collect_turns(
         client, start=start, end=end, engine_id=args.engine_id
     )
@@ -97,7 +97,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     users = {t["user_principal"] for t in turns if t.get("user_principal")}
     print(f"      {n_turns:,} turns · {len(users)} distinct users")
 
-    print("\n[2/2] Cloud Trace: model spans and token counts …", flush=True)
+    print("\n[2/3] Cloud Trace: model spans and token counts …", flush=True)
     models, tools = collector.collect_spans(
         client, start=start, end=end, trace_filters=args.trace_filter
     )
@@ -106,6 +106,18 @@ def cmd_collect(args: argparse.Namespace) -> int:
     tok_in, tok_out = collector.summarise(models)
     print(f"      {n_models:,} model calls · {n_tools:,} tool calls")
     print(f"      {tok_in:,} input tokens · {tok_out:,} output tokens")
+
+    print("\n[3/3] Cloud Logging: NotebookLM Enterprise activity …", flush=True)
+    nblm = collector.collect_notebooklm_activity(client, start=start, end=end)
+    n_nblm = store.upsert_notebooklm_activity(conn, nblm)
+    nblm_users = {r["user_principal"] for r in nblm if r.get("user_principal")}
+    if n_nblm:
+        print(f"      {n_nblm:,} activities · {len(nblm_users)} distinct users (no token data exists)")
+    else:
+        print(
+            "      0 activities. NotebookLM Enterprise logging is off by default and has\n"
+            "      to be enabled per project; see 'NotebookLM Enterprise' in the README."
+        )
 
     store.set_meta(conn, "last_collect_utc", end.strftime("%Y-%m-%dT%H:%M:%SZ"))
     store.set_meta(conn, "project", project)
@@ -122,14 +134,25 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     matched = conn.execute("SELECT COALESCE(SUM(attributed),0) c FROM usage").fetchone()["c"]
     total = conn.execute("SELECT COUNT(*) c FROM usage").fetchone()["c"]
+    via = {
+        r["attributed_via"]: r["c"]
+        for r in conn.execute(
+            "SELECT attributed_via, COUNT(*) c FROM usage WHERE attributed = 1 GROUP BY 1"
+        )
+    }
     pct = (matched / total * 100) if total else 0.0
     print(f"\nattributed to a user: {matched:,}/{total:,} model calls ({pct:.1f}%)")
+    if matched:
+        print(
+            f"  {via.get('trace', 0):,} via trace id · {via.get('session', 0):,} via session id"
+        )
     if total and pct < 100:
         print(
-            "  Gemini Enterprise stamps its trace id on the StreamAssist log entry, so\n"
-            "  core-assistant turns resolve to a named account. A turn routed to a custom\n"
-            "  agent (ADK on Agent Engine, or A2A on Cloud Run) executes under that agent's\n"
-            "  own trace id, so its tokens are recorded under the 'Agent Engine' surface\n"
+            "  Core-assistant turns share their trace id with the StreamAssist log entry\n"
+            "  and resolve directly. Work spawned by a turn (Deep Research sub-agents run\n"
+            "  one trace each) is recovered through the session id its spans carry. What\n"
+            "  remains is a custom agent (ADK on Agent Engine, or A2A on Cloud Run) running\n"
+            "  under its own trace id with no session stamped, so its tokens are counted\n"
             "  with no end user attached. See 'Attribution coverage' in the README."
         )
     conn.close()
@@ -163,6 +186,21 @@ def cmd_stats(args: argparse.Namespace) -> int:
         f"{'TOTAL (' + str(tot['u']) + ' users)':<38}{tot['t']:>8,}{tot['c']:>8,}"
         f"{tot['i']:>12,}{tot['o']:>10,}{tot['i'] + tot['o']:>12,}"
     )
+
+    nblm = conn.execute(
+        "SELECT * FROM notebooklm_by_user ORDER BY activities DESC"
+    ).fetchall()
+    if nblm:
+        head = f"{'NOTEBOOKLM USER':<38}{'ACTIONS':>8}{'NOTEBOOKS':>10}{'DAYS':>6}  LAST SEEN"
+        print("\nNotebookLM Enterprise — activity only; its log carries no token counts")
+        print(head)
+        print("-" * len(head))
+        for r in nblm:
+            user = (r["user_principal"] or "")[:37]
+            print(
+                f"{user:<38}{r['activities']:>8,}{r['notebooks']:>10,}"
+                f"{r['active_days']:>6,}  {r['last_seen'] or ''}"
+            )
     conn.close()
     return 0
 
