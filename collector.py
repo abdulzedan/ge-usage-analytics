@@ -6,6 +6,9 @@ token counts (`gen_ai.usage.*`) and model names (`gen_ai.request.model`).
 
 This module parses both sources. The `usage` view in store.py joins them by
 trace ID, then by session ID from `gen_ai.conversation.id` when available.
+
+NotebookLM Enterprise and Antigravity write separate logs that need no join.
+Antigravity entries include the account, model, and token counts.
 """
 
 from __future__ import annotations
@@ -27,10 +30,23 @@ NOTEBOOKLM_ACTIVITY_LOG = (
     "discoveryengine.googleapis.com%2Fnotebooklm_enterprise_user_activity"
 )
 
+# Antigravity, used through a Gemini Enterprise license, is served by the
+# Business AI Code API and writes nothing until an admin turns on Metadata
+# logging in the Gemini Enterprise AI developer tools settings. From then on
+# every inference request leaves one InferenceResponseLog entry naming the
+# user, the model and its token counts. The separate prompts-and-responses
+# setting adds InferenceRequestLog entries carrying the prompt; the filter
+# selects by payload type so those are never read.
+ANTIGRAVITY_RESOURCE_TYPE = "businessaicode.googleapis.com/BAICInstance"
+ANTIGRAVITY_RESPONSE_LOG_TYPE = (
+    "type.googleapis.com/google.cloud.businessaicode.logging.v1.InferenceResponseLog"
+)
+
 _ENGINE_RE = re.compile(r"engines/([^/]+)")
 _SESSION_RE = re.compile(r"sessions/([^/]+)")
 _AGENT_RE = re.compile(r"agents/([^/]+)")
 _NOTEBOOK_RE = re.compile(r"notebooks/([^/]+)")
+_MEMBER_TYPE_RE = re.compile(r"^(?:user|serviceAccount):")
 
 
 # --------------------------------------------------------------------------
@@ -217,6 +233,105 @@ def collect_notebooklm_activity(
     for entry in client.iter_log_entries(log_filter):
         row = parse_notebooklm_activity(entry)
         if row and row.get("user_principal"):
+            rows[row["insert_id"]] = row
+    return list(rows.values())
+
+
+# --------------------------------------------------------------------------
+# Cloud Logging -> antigravity_requests
+# --------------------------------------------------------------------------
+
+
+def build_antigravity_log_filter() -> str:
+    """Filter for Antigravity's per-request metadata entries.
+
+    Matching the response payload type, rather than the resource alone, keeps
+    the prompt-bearing request entries out of the download entirely.
+    """
+    return (
+        f'resource.type="{ANTIGRAVITY_RESOURCE_TYPE}"'
+        f' AND jsonPayload.@type="{ANTIGRAVITY_RESPONSE_LOG_TYPE}"'
+    )
+
+
+def _bare_principal(member: str | None) -> str | None:
+    """`user:dana@example.com` -> `dana@example.com`.
+
+    Antigravity labels the caller in IAM member form; the Gemini Enterprise and
+    NotebookLM logs record the bare account. Dropping the type prefix makes the
+    same person the same key in every table.
+    """
+    if not member:
+        return None
+    return _MEMBER_TYPE_RE.sub("", member)
+
+
+def _count(fields: dict[str, Any], key: str) -> int | None:
+    """An int64 count, which arrives as a JSON string; None when absent."""
+    try:
+        return int(fields[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def parse_antigravity_request(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one InferenceResponseLog entry to an `antigravity_requests` row.
+
+    Only metadata is read. With prompts-and-responses logging on, the same
+    entry also carries the model's output; none of it is kept.
+
+    The token fields follow the Gemini API's usage metadata: the total is the
+    prompt, the response candidates and the thinking tokens added together,
+    and a model that does not think omits `thoughtsTokenCount`.
+    """
+    insert_id = entry.get("insertId")
+    if not insert_id:
+        return None
+
+    payload = entry.get("jsonPayload") or {}
+    labels = entry.get("labels") or {}
+    metadata = payload.get("metadata") or {}
+
+    return {
+        "insert_id": insert_id,
+        "ts": _sortable(entry.get("timestamp")),
+        "user_principal": _bare_principal(labels.get("user_id")),
+        "client_name": labels.get("client_name"),
+        "client_version": labels.get("client_version"),
+        "model": labels.get("model"),
+        "experience": payload.get("experience"),
+        "input_tokens": _count(metadata, "promptTokenCount"),
+        "output_tokens": _count(metadata, "candidatesTokenCount"),
+        "thinking_tokens": _count(metadata, "thoughtsTokenCount"),
+        "total_tokens": _count(metadata, "totalTokenCount"),
+        "quota_type": metadata.get("quotaType"),
+        # Background tasks run on Flash Lite outside any conversation, and
+        # their entries carry no trajectory id.
+        "request_id": labels.get("request_id"),
+        "trajectory_id": labels.get("trajectory_id") or None,
+        "location": ((entry.get("resource") or {}).get("labels") or {}).get("location"),
+    }
+
+
+def collect_antigravity_requests(
+    client: GcpClient, *, start: dt.datetime, end: dt.datetime
+) -> list[dict[str, Any]]:
+    """Collect Antigravity requests, keyed by insert id.
+
+    Unlike the activity logs, an entry is kept even without a user: each row
+    carries tokens, and dropping it would understate consumption. A project
+    that never enabled Metadata logging matches nothing; that is not an error.
+    """
+    log_filter = build_antigravity_log_filter()
+    log_filter += (
+        f' AND timestamp>="{start.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+        f' AND timestamp<="{end.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+    )
+
+    rows: dict[str, dict[str, Any]] = {}
+    for entry in client.iter_log_entries(log_filter):
+        row = parse_antigravity_request(entry)
+        if row:
             rows[row["insert_id"]] = row
     return list(rows.values())
 

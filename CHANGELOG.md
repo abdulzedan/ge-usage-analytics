@@ -5,6 +5,33 @@ This project is a demonstration for local log collection, not a production tool.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] 2026-09-22
+
+### Added
+
+- Antigravity collection. With Metadata logging switched on in Gemini
+  Enterprise's AI developer tools settings (it is off by default), every
+  Antigravity request served through the Business AI Code API writes an
+  `InferenceResponseLog` entry naming the account, the model, the client and
+  its version, the conversation, and the input, output and thinking token
+  counts. `collect` reads those entries into an `antigravity_requests` table
+  with an `antigravity_by_user` rollup, surfaced in `stats` and as dashboard
+  cards for users, models and client versions. The filter matches the
+  response entries only, so prompts logged under the separate
+  prompts-and-responses setting are never downloaded, and response text on
+  those entries is discarded. The token counts come from a different source
+  than the Cloud Trace spans, so they are reported on their own and never
+  added to the Gemini Enterprise token figures. The entry format is not in
+  Google's documentation; the field names were checked against live entries.
+- The demo generator produces Antigravity requests, including the Flash Lite
+  background calls and a client upgrade in progress.
+
+### Changed
+
+- `stats` reports whichever sources hold data. It used to stop at "No data
+  yet" unless Gemini Enterprise model calls existed, which hid a
+  NotebookLM-only database and would have hidden an Antigravity-only one.
+
 ## [1.1.0] 2026-08-20
 
 Adds session-based attribution and NotebookLM activity collection after a
@@ -70,5 +97,6 @@ Calls without matching user identifiers remain unattributed but contribute to
 collected token totals. Source retention limits the available history. See the
 README for details.
 
+[1.2.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.2.0
 [1.1.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.1.0
 [1.0.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.0.0

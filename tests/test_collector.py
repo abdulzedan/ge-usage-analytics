@@ -285,6 +285,152 @@ def test_collect_notebooklm_activity_windows_dedupes_and_drops_anonymous_entries
 
 
 # ---------------------------------------------------------------------------
+# Cloud Logging: Antigravity
+# ---------------------------------------------------------------------------
+
+
+def test_build_antigravity_log_filter_selects_the_response_log_only():
+    f = collector.build_antigravity_log_filter()
+    assert 'resource.type="businessaicode.googleapis.com/BAICInstance"' in f
+    assert (
+        'jsonPayload.@type="type.googleapis.com/'
+        'google.cloud.businessaicode.logging.v1.InferenceResponseLog"'
+    ) in f
+    # The request log carries the prompt when that setting is on; never match it.
+    assert "InferenceRequestLog" not in f
+
+
+def _antigravity_entry(**overrides):
+    """Shaped like a live InferenceResponseLog entry (September 2026)."""
+    entry = {
+        "insertId": "agy-1",
+        "timestamp": "2026-07-01T09:30:00.123456789Z",
+        "logName": "projects/example-project/logs/"
+        "businessaicode.googleapis.com%2Finference_response",
+        "resource": {
+            "type": "businessaicode.googleapis.com/BAICInstance",
+            "labels": {"location": "global", "resource_container": "1234"},
+        },
+        "labels": {
+            "client_name": "antigravity_cli",
+            "client_version": "1.2.8",
+            "model": "gemini-3.1-pro-preview",
+            "request_id": "traj-1-0",
+            "trajectory_id": "traj-1",
+            "user_id": "user:dana@example.com",
+        },
+        "jsonPayload": {
+            "@type": "type.googleapis.com/google.cloud.businessaicode.logging.v1.InferenceResponseLog",
+            "experience": "gemini-3.1-pro-high",
+            "metadata": {
+                "promptTokenCount": "12534",
+                "candidatesTokenCount": "19",
+                "thoughtsTokenCount": "274",
+                "totalTokenCount": "12827",
+                "quotaType": "REGULAR_QUOTA",
+            },
+        },
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_parse_antigravity_request_extracts_user_model_and_tokens():
+    row = collector.parse_antigravity_request(_antigravity_entry())
+    assert row == {
+        "insert_id": "agy-1",
+        "ts": "2026-07-01T09:30:00",
+        "user_principal": "dana@example.com",  # the IAM member prefix is dropped
+        "client_name": "antigravity_cli",
+        "client_version": "1.2.8",
+        "model": "gemini-3.1-pro-preview",
+        "experience": "gemini-3.1-pro-high",
+        # int64 strings on the wire; the total is the three parts added up
+        "input_tokens": 12534,
+        "output_tokens": 19,
+        "thinking_tokens": 274,
+        "total_tokens": 12827,
+        "quota_type": "REGULAR_QUOTA",
+        "request_id": "traj-1-0",
+        "trajectory_id": "traj-1",
+        "location": "global",
+    }
+
+
+def test_parse_antigravity_request_handles_a_background_task():
+    """Flash Lite background work: no thinking, and outside any conversation."""
+    entry = _antigravity_entry()
+    entry["labels"]["model"] = "gemini-3.5-flash-lite"
+    entry["labels"]["trajectory_id"] = ""
+    entry["jsonPayload"]["metadata"] = {
+        "promptTokenCount": "91", "candidatesTokenCount": "3", "totalTokenCount": "94",
+    }
+    row = collector.parse_antigravity_request(entry)
+
+    assert row["trajectory_id"] is None  # not a conversation of its own
+    assert row["thinking_tokens"] is None
+    assert (row["input_tokens"], row["output_tokens"], row["total_tokens"]) == (91, 3, 94)
+    assert row["quota_type"] is None
+
+
+def test_parse_antigravity_request_leaves_a_bare_account_alone():
+    entry = _antigravity_entry()
+    entry["labels"]["user_id"] = "dana@example.com"
+    assert collector.parse_antigravity_request(entry)["user_principal"] == "dana@example.com"
+
+
+def test_parse_antigravity_request_keeps_no_response_content():
+    """With prompts-and-responses logging on, the entry also carries the output."""
+    entry = _antigravity_entry()
+    entry["jsonPayload"]["output"] = {
+        "candidates": [{"messages": [{"author": "MODEL", "content": "secret code"}]}]
+    }
+    row = collector.parse_antigravity_request(entry)
+    assert "secret code" not in repr(row)
+
+
+def test_parse_antigravity_request_tolerates_a_bad_token_count():
+    entry = _antigravity_entry()
+    entry["jsonPayload"]["metadata"] = {"promptTokenCount": "10", "totalTokenCount": "n/a"}
+    row = collector.parse_antigravity_request(entry)
+    assert row["total_tokens"] is None
+    assert row["input_tokens"] == 10
+
+
+def test_parse_antigravity_request_requires_an_insert_id():
+    assert collector.parse_antigravity_request(_antigravity_entry(insertId=None)) is None
+
+
+def test_parse_antigravity_request_tolerates_a_sparse_payload():
+    row = collector.parse_antigravity_request({"insertId": "x"})
+    assert row["insert_id"] == "x"
+    assert row["user_principal"] is None
+    assert row["model"] is None
+    assert row["trajectory_id"] is None
+    assert (row["input_tokens"], row["output_tokens"], row["thinking_tokens"]) == (None,) * 3
+    assert row["total_tokens"] is None
+
+
+def test_collect_antigravity_requests_windows_dedupes_and_keeps_anonymous_tokens():
+    """An entry without a user still carries tokens, so it is kept."""
+    anonymous = _antigravity_entry(insertId="agy-2")
+    anonymous["labels"] = {"model": "gemini-3.1-pro-preview"}
+    client = _FakeClient(entries=[_antigravity_entry(), _antigravity_entry(), anonymous])
+
+    rows = collector.collect_antigravity_requests(
+        client,
+        start=dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc),
+        end=dt.datetime(2026, 7, 8, tzinfo=dt.timezone.utc),
+    )
+
+    assert sorted(r["insert_id"] for r in rows) == ["agy-1", "agy-2"]
+    sent = client.log_filters[0]
+    assert "InferenceResponseLog" in sent
+    assert 'timestamp>="2026-07-01T00:00:00Z"' in sent
+    assert 'timestamp<="2026-07-08T00:00:00Z"' in sent
+
+
+# ---------------------------------------------------------------------------
 # Cloud Trace
 # ---------------------------------------------------------------------------
 

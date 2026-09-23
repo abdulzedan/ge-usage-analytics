@@ -105,6 +105,7 @@ _TEMPLATE = r"""<!doctype html>
   .hero .note  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .card .kpis { margin-bottom: 14px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .tile .label { font-size: 12px; color: var(--text-secondary); }
   .tile .value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
@@ -277,6 +278,30 @@ _TEMPLATE = r"""<!doctype html>
     <header><h2>Recent NotebookLM actions</h2></header>
     <p class="desc">Newest first, including prompts for chat actions.</p>
     <div class="tablewrap" id="tableNblmRecent"></div>
+  </div>
+
+  <div class="card hidden" id="cardAgy">
+    <header><h2>Antigravity</h2></header>
+    <p class="desc">From Antigravity's metadata log, over the whole collected window. Its token counts
+    are the log's own, with thinking tokens counted separately and included in the total; none of
+    them is part of the token figures above, and the filter row does not apply.</p>
+    <section class="kpis" id="agyKpis"></section>
+    <div class="tablewrap" id="tableAgy"></div>
+  </div>
+
+  <div class="grid2 hidden" id="gridAgy">
+    <div class="card">
+      <header><h2>Antigravity by model</h2></header>
+      <p class="desc">Antigravity runs its background tasks on Gemini Flash Lite, so expect a Flash
+      Lite model here even if nobody chose one.</p>
+      <div class="tablewrap" id="tableAgyModels"></div>
+    </div>
+
+    <div class="card">
+      <header><h2>Antigravity clients</h2></header>
+      <p class="desc">Client builds in use, by name and version.</p>
+      <div class="tablewrap" id="tableAgyClients"></div>
+    </div>
   </div>
 
   <footer class="note">
@@ -777,6 +802,49 @@ if (DATA.notebooklmRecent.length) {
   ], DATA.notebooklmRecent);
 }
 
+/* Antigravity has its own log and its own token counts, with no trace ids to
+   join on, so it too is rendered once and kept out of the filter row. */
+if (DATA.antigravity.length) {
+  const t = DATA.antigravityTotals;
+  $("cardAgy").classList.remove("hidden");
+  $("agyKpis").innerHTML = [
+    ["Named users", num(t.users)],
+    ["Requests", num(t.requests)],
+    ["Conversations", num(t.conversations)],
+    ["Total tokens", num(t.tokens)],
+    ["Input tokens", num(t.input)],
+    ["Output tokens", num(t.output)],
+    ["Thinking tokens", num(t.thinking)],
+  ].map(([l, v]) => `<div class="tile"><div class="label">${esc(l)}</div>`
+    + `<div class="value">${esc(v)}</div></div>`).join("");
+  renderTable("tableAgy", [
+    { label: "User", get: (r) => r.u },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Conversations", num: true, get: (r) => num(r.c) },
+    { label: "Input", num: true, get: (r) => num(r.i) },
+    { label: "Output", num: true, get: (r) => num(r.o) },
+    { label: "Thinking", num: true, get: (r) => num(r.th) },
+    { label: "Total", num: true, get: (r) => num(r.k) },
+    { label: "Active days", num: true, get: (r) => num(r.d) },
+    { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
+  ], DATA.antigravity);
+
+  $("gridAgy").classList.remove("hidden");
+  renderTable("tableAgyModels", [
+    { label: "Model", get: (r) => r.m || "(unknown)" },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Tokens", num: true, get: (r) => num(r.k) },
+  ], DATA.antigravityModels);
+  renderTable("tableAgyClients", [
+    { label: "Client", get: (r) => r.c || "(unknown)" },
+    { label: "Version", get: (r) => r.v || "—" },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
+  ], DATA.antigravityClients);
+}
+
 document.querySelectorAll(".toggle").forEach((btn) => {
   btn.addEventListener("click", () => {
     const v = btn.dataset.view;
@@ -891,11 +959,64 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
         for r in conn.execute("SELECT * FROM notebooklm_activity ORDER BY ts DESC LIMIT 200")
     ]
 
+    antigravity = [
+        {
+            "u": r["user_principal"],
+            "n": r["requests"],
+            "c": r["conversations"],
+            "i": r["input_tokens"],
+            "o": r["output_tokens"],
+            "th": r["thinking_tokens"],
+            "k": r["total_tokens"],
+            "d": r["active_days"],
+            "l": r["last_seen"],
+        }
+        for r in conn.execute("SELECT * FROM antigravity_by_user ORDER BY total_tokens DESC")
+    ]
+
+    totals = conn.execute(
+        "SELECT COUNT(*) n, COUNT(DISTINCT user_principal) u,"
+        " COUNT(DISTINCT trajectory_id) c,"
+        " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(output_tokens), 0) o,"
+        " COALESCE(SUM(thinking_tokens), 0) th, COALESCE(SUM(total_tokens), 0) k"
+        " FROM antigravity_requests"
+    ).fetchone()
+
+    antigravity_models = [
+        {"m": r["model"], "n": r["n"], "u": r["u"], "k": r["k"]}
+        for r in conn.execute(
+            "SELECT model, COUNT(*) n, COUNT(DISTINCT user_principal) u,"
+            " COALESCE(SUM(total_tokens), 0) k"
+            " FROM antigravity_requests GROUP BY model ORDER BY k DESC"
+        )
+    ]
+
+    antigravity_clients = [
+        {"c": r["client_name"], "v": r["client_version"], "n": r["n"], "u": r["u"], "l": r["l"]}
+        for r in conn.execute(
+            "SELECT client_name, client_version, COUNT(*) n,"
+            " COUNT(DISTINCT user_principal) u, MAX(ts) l"
+            " FROM antigravity_requests GROUP BY 1, 2 ORDER BY n DESC"
+        )
+    ]
+
     return {
         "rows": rows,
         "queries": queries,
         "notebooklm": notebooklm,
         "notebooklmRecent": notebooklm_recent,
+        "antigravity": antigravity,
+        "antigravityTotals": {
+            "requests": totals["n"],
+            "users": totals["u"],
+            "conversations": totals["c"],
+            "input": totals["i"],
+            "output": totals["o"],
+            "thinking": totals["th"],
+            "tokens": totals["k"],
+        },
+        "antigravityModels": antigravity_models,
+        "antigravityClients": antigravity_clients,
     }
 
 
@@ -915,11 +1036,13 @@ def render_dashboard(
     min_time = min((r["t"] for r in rows), default="")
     turn_count = conn.execute("SELECT COUNT(*) AS c FROM turns").fetchone()["c"]
     nblm_count = conn.execute("SELECT COUNT(*) AS c FROM notebooklm_activity").fetchone()["c"]
+    agy_count = payload["antigravityTotals"]["requests"]
 
     span = f"{min_time.replace('T', ' ')} → {max_time.replace('T', ' ')} UTC" if rows else "no data yet"
     subtitle = (
         f"Project {project} · {len(rows):,} model calls · {turn_count:,} logged turns"
         f"{f' · {nblm_count:,} NotebookLM activities' if nblm_count else ''}"
+        f"{f' · {agy_count:,} Antigravity requests' if agy_count else ''}"
         f" · {span}"
         f"{' · generated ' + generated_at if generated_at else ''}"
         " · Cloud Logging + Cloud Trace"

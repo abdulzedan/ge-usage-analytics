@@ -190,6 +190,49 @@ def test_stats_stays_quiet_without_notebooklm_data(db, capsys):
     assert "NotebookLM" not in capsys.readouterr().out
 
 
+_AGY_ROW = {
+    "insert_id": "a1", "ts": "2026-07-02T11:00:00", "user_principal": "sam@example.com",
+    "model": "gemini-3.1-pro-preview", "input_tokens": 11500, "output_tokens": 200,
+    "thinking_tokens": 300, "total_tokens": 12000, "trajectory_id": "traj-1",
+}
+
+
+def test_stats_appends_antigravity_usage_when_present(db, capsys):
+    conn = store.connect(db)
+    store.upsert_antigravity_requests(conn, [_AGY_ROW])
+    conn.close()
+
+    rc = ge_usage.cmd_stats(argparse.Namespace(db=db))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Antigravity" in out
+    assert "THINKING" in out
+    line = next(ln for ln in out.splitlines() if ln.startswith("sam@example.com"))
+    assert line.split()[1:] == ["1", "1", "11,500", "200", "300", "12,000"]
+    assert "TOTAL (1 users)" in out  # the Gemini Enterprise table is unchanged
+
+
+def test_stats_reports_antigravity_without_any_gemini_enterprise_data(tmp_path, capsys):
+    path = str(tmp_path / "agy.db")
+    conn = store.connect(path)
+    store.upsert_antigravity_requests(conn, [_AGY_ROW])
+    conn.close()
+
+    rc = ge_usage.cmd_stats(argparse.Namespace(db=path))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "sam@example.com" in out
+    assert "TOTAL (" not in out
+    assert "Run `collect` first" not in out
+
+
+def test_stats_stays_quiet_without_antigravity_data(db, capsys):
+    ge_usage.cmd_stats(argparse.Namespace(db=db))
+    assert "Antigravity" not in capsys.readouterr().out
+
+
 def test_stats_on_an_empty_database_reports_no_data(tmp_path, capsys):
     path = str(tmp_path / "empty.db")
     store.connect(path).close()
@@ -324,7 +367,7 @@ def test_sql_shell_reports_a_missing_sqlite3_binary(db, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# collect, with the two Google Cloud calls stubbed out
+# collect, with the Google Cloud reads stubbed out
 # ---------------------------------------------------------------------------
 
 
@@ -369,6 +412,23 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
             }
         ],
     )
+    monkeypatch.setattr(
+        ge_usage.collector,
+        "collect_antigravity_requests",
+        lambda client, *, start, end: [
+            {
+                "insert_id": "a1",
+                "ts": "2026-07-01T11:00:00",
+                "user_principal": "dana@example.com",
+                "model": "gemini-3.1-pro-preview",
+                "input_tokens": 11500,
+                "output_tokens": 200,
+                "thinking_tokens": 300,
+                "total_tokens": 12000,
+                "trajectory_id": "traj-1",
+            }
+        ],
+    )
 
     rc = ge_usage.cmd_collect(
         argparse.Namespace(
@@ -383,6 +443,8 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
     assert "1 model calls · 1 tool calls" in out
     assert "1,200 input tokens · 340 output tokens" in out
     assert "1 activities · 1 distinct users (no token data exists)" in out
+    assert "1 requests · 1 distinct users · 1 conversations" in out
+    assert "11,500 input · 200 output · 300 thinking tokens" in out
     assert "Gemini Enterprise" in out
     assert "attributed to a user: 1/1 model calls (100.0%)" in out
     assert "1 via trace id · 0 via session id" in out
@@ -390,6 +452,9 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
     conn = store.connect(path)
     assert conn.execute("SELECT COUNT(*) c FROM usage").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM notebooklm_activity").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM antigravity_requests").fetchone()["c"] == 1
+    # Antigravity tokens are reported on their own, never folded into usage.
+    assert conn.execute("SELECT SUM(total_tokens) t FROM usage").fetchone()["t"] == 1540
     assert store.get_meta(conn, "project") == "example-project"
     assert store.get_meta(conn, "last_collect_utc") is not None
     conn.close()
@@ -422,6 +487,9 @@ def test_collect_explains_a_shortfall_in_attribution(tmp_path, monkeypatch, caps
     monkeypatch.setattr(
         ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
     )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_antigravity_requests", lambda client, **kw: []
+    )
 
     ge_usage.cmd_collect(
         argparse.Namespace(
@@ -435,6 +503,9 @@ def test_collect_explains_a_shortfall_in_attribution(tmp_path, monkeypatch, caps
     assert "Calls without a matching trace or session ID remain unattributed." in out
     # Nothing collected from NotebookLM points at the off-by-default logging.
     assert "off by default" in out
+    # ...and nothing from Antigravity points at the setting that turns its log on.
+    assert "0 requests" in out
+    assert "Metadata logging" in out
 
 
 def test_collect_reports_the_session_recoveries_separately(tmp_path, monkeypatch, capsys):
@@ -467,6 +538,9 @@ def test_collect_reports_the_session_recoveries_separately(tmp_path, monkeypatch
     monkeypatch.setattr(
         ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
     )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_antigravity_requests", lambda client, **kw: []
+    )
 
     ge_usage.cmd_collect(
         argparse.Namespace(
@@ -493,6 +567,9 @@ def test_collect_accepts_an_explicit_start_time(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
     )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_antigravity_requests", lambda client, **kw: []
+    )
 
     ge_usage.cmd_collect(
         argparse.Namespace(
@@ -518,6 +595,9 @@ def test_collect_applies_the_default_trace_filters(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         ge_usage.collector, "collect_notebooklm_activity", lambda client, **kw: []
+    )
+    monkeypatch.setattr(
+        ge_usage.collector, "collect_antigravity_requests", lambda client, **kw: []
     )
 
     ge_usage.cmd_collect(

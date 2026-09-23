@@ -189,6 +189,55 @@ def test_without_notebooklm_data_the_payload_and_subtitle_stay_quiet(conn):
     assert "NotebookLM activities" not in html
 
 
+def test_antigravity_rollups_are_embedded_and_counted(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [
+            {"insert_id": "a1", "ts": "2026-07-01T09:00:00",
+             "user_principal": "sam@example.com", "client_name": "antigravity_cli",
+             "client_version": "1.2.8", "model": "gemini-3.5-flash-lite",
+             "input_tokens": 91, "output_tokens": 3, "thinking_tokens": None,
+             "total_tokens": 94, "trajectory_id": None},
+            {"insert_id": "a2", "ts": "2026-07-01T09:00:40",
+             "user_principal": "sam@example.com", "client_name": "antigravity_cli",
+             "client_version": "1.2.8", "model": "gemini-3.1-pro-preview",
+             "input_tokens": 12534, "output_tokens": 19, "thinking_tokens": 274,
+             "total_tokens": 12827, "trajectory_id": "traj-1"},
+        ],
+    )
+    html = render_dashboard(conn, project="example-project")
+    payload = _payload(html)
+
+    (user,) = payload["antigravity"]
+    assert (user["u"], user["n"], user["c"]) == ("sam@example.com", 2, 1)
+    assert (user["i"], user["o"], user["th"], user["k"]) == (12625, 22, 274, 12921)
+    assert payload["antigravityTotals"] == {
+        "requests": 2, "users": 1, "conversations": 1,
+        "input": 12625, "output": 22, "thinking": 274, "tokens": 12921,
+    }
+    assert [m["m"] for m in payload["antigravityModels"]] == [
+        "gemini-3.1-pro-preview", "gemini-3.5-flash-lite",
+    ]
+    (client,) = payload["antigravityClients"]
+    assert (client["c"], client["v"], client["n"]) == ("antigravity_cli", "1.2.8", 2)
+    assert "2 Antigravity requests" in html
+
+    # The Gemini Enterprise rows, and therefore every filtered chart, are untouched.
+    assert len(payload["rows"]) == 1
+    assert sum(r["i"] + r["o"] for r in payload["rows"]) == 1540
+
+
+def test_without_antigravity_data_the_payload_and_subtitle_stay_quiet(conn):
+    html = render_dashboard(conn, project="example-project")
+    payload = _payload(html)
+
+    assert payload["antigravity"] == []
+    assert payload["antigravityModels"] == []
+    assert payload["antigravityClients"] == []
+    assert payload["antigravityTotals"]["requests"] == 0
+    assert "Antigravity requests" not in html
+
+
 def test_prompt_text_is_normalised_to_a_single_line(conn):
     queries = _payload(render_dashboard(conn, project="example-project"))["queries"]
     assert queries["trace-a"] == "What is the status of order 4471? Any update?"
