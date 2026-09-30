@@ -1,22 +1,15 @@
 """Local SQLite store for Gemini Enterprise usage telemetry.
 
-Four fact tables:
+Four activity tables:
 
   turns                one row per user chat turn      (source: Cloud Logging)
   model_calls          one row per LLM call            (source: Cloud Trace span attributes)
   tool_calls           one row per tool execution      (source: Cloud Trace span attributes)
-  notebooklm_activity  one row per NotebookLM action   (source: Cloud Logging; no tokens exist)
+  notebooklm_activity  one row per NotebookLM action   (source: Cloud Logging)
 
-The `usage` view joins model_calls back to the account that initiated them, on
-trace id first and on session id where the trace id breaks. The session key
-re-attaches work that ran under its own traces but stamped the Gemini
-Enterprise session on its spans; work that stamped nothing (Deep Research's
-detached sub-agent calls, as observed live, and custom agents by default)
-stays unattributed rather than being guessed. Both joins are exact keys.
-
-Cloud Trace and the _Default log bucket both expire records after 30 days, so a
-database populated on a schedule retains history beyond the platform's own
-retention window.
+The `usage` view links model calls to accounts by matching trace ID, then
+Gemini Enterprise session ID. Calls with neither matching key stay unattributed.
+Local records remain available after their source logs or traces expire.
 """
 
 from __future__ import annotations
@@ -119,10 +112,8 @@ CREATE VIEW usage AS
 SELECT
     u.*,
     -- Deep Research executes as a planner plus deep_research_child_N
-    -- sub-agents. agent_group folds that family into one entity so
-    -- per-feature questions (who uses Deep Research most) are one
-    -- filter or GROUP BY, while `agent` keeps the per-child grain
-    -- needed to diagnose attribution coverage.
+    -- sub-agents. agent_group groups them for reporting; agent keeps
+    -- individual names for attribution checks.
     CASE
         WHEN u.agent LIKE 'deep\\_research%' ESCAPE '\\' THEN 'Deep Research'
         ELSE u.agent

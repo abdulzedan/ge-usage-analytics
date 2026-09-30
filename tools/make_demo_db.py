@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """Build a database of synthetic activity.
 
-Used for the screenshots in the README, for the end-to-end check in CI, and for
-trying the dashboard out before pointing the tool at a real project. The output
-is deterministic for a given seed, so a regenerated screenshot differs only
-where the code changed.
-
-Every identity, prompt and token count here is invented. Nothing in this file
-touches Google Cloud.
+Used for README screenshots, CI, and trying the dashboard locally. The same
+options and seed produce the same data. All identities, prompts, and token
+counts are synthetic; the script does not contact Google Cloud.
 
     python3 tools/make_demo_db.py --out demo.db --days 30
 """
@@ -43,7 +39,7 @@ USERS = [
 #   trace    inside the turn's own trace (core assistant and agents hosted in
 #            Gemini Enterprise)
 #   session  under the agent's own traces, with the Gemini Enterprise session
-#            stamped on the spans -- the close-the-gap recipe from the README
+#            recorded on the spans
 #   none     under the agent's own traces and its own Agent Engine session,
 #            so no key matches and the calls stay unattributed
 AGENTS = [
@@ -129,7 +125,7 @@ def _research_call(
     *,
     heavy: bool,
 ) -> dict:
-    """One Deep Research model call; `heavy` marks the reading-laden sub-agents.
+    """One Deep Research model call; `heavy` uses higher input-token counts.
 
     No session id on any of these: as observed on a live project, Deep
     Research spans carry the engine and their own agent name but no
@@ -252,13 +248,9 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
                     }
                 )
 
-    # Deep Research turns, shaped like the live behaviour (observed August
-    # 2026): the request is one logged StreamAssist turn that records no
-    # agentInfo; the planner and a minority of sub-agent calls execute inside
-    # the request trace and resolve through it; the remaining sub-agents run
-    # under traces of their own with no session stamped, so no exact key
-    # exists and they stay unattributed under their deep_research_child_N
-    # agent names.
+    # Model the August 2026 observation: the logged StreamAssist turn has no
+    # agentInfo. The planner and some children share its trace. Other children
+    # have separate traces and no matching session ID, so stay unattributed.
     for n in range(max(2, turns // 30)):
         user = _weighted(rng, USERS)[0]
         started = _turn_time(rng, end, days)
@@ -285,8 +277,7 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
                            "deep_research", heavy=False)
         )
 
-        # Parallel sub-agents: some land in the request trace, the rest run
-        # detached and unrecoverable until the platform stamps a key.
+        # Some sub-agents share the request trace; others have no matching key.
         for k in range(rng.randint(3, 6)):
             in_trace = rng.random() < 0.4
             child_trace = turn_trace if in_trace else f"{seed:04x}e{n:013x}{k:014x}"

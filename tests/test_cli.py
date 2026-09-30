@@ -432,7 +432,7 @@ def test_collect_explains_a_shortfall_in_attribution(tmp_path, monkeypatch, caps
     out = capsys.readouterr().out
 
     assert "attributed to a user: 0/1 model calls (0.0%)" in out
-    assert "own trace id" in out
+    assert "Calls without a matching trace or session ID remain unattributed." in out
     # Nothing collected from NotebookLM points at the off-by-default logging.
     assert "off by default" in out
 

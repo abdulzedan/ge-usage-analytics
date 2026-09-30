@@ -1,45 +1,44 @@
 # Contributing
 
+This project demonstrates how to collect and inspect Gemini Enterprise logs and
+traces. It is intended for local experiments, not production use.
+
+## Run the checks
+
 ```bash
 pip install '.[dev]'
 make check          # ruff + pytest
 ```
 
-Everything runs offline. `urlopen` is replaced in the tests and the Google Cloud
-calls are stubbed, so no credentials or network access are needed. CI runs the
-same checks on Python 3.9 to 3.13.
+The tests mock Google Cloud calls, so they need no credentials or network access.
+CI runs the same checks on Python 3.9 to 3.13.
 
 ## Constraints
 
-**No runtime dependencies.** Standard library only, so the directory can be
-copied onto a locked-down host and run in place. Anything extra goes behind an
-optional extra in `tools/`, as `capture_screenshots.py` does with Pillow.
+**Use the standard library at runtime.** Keep dependencies for development and
+`tools/` scripts in optional extras, such as Pillow for `capture_screenshots.py`.
 
-**Never commit collected data.** `usage.db` and `dashboard.html` hold real email
-addresses and prompt text. Both are gitignored and CI fails if either is
-tracked, but `git add -f` still gets past the first of those.
+**Do not commit collected data.** `usage.db` and `dashboard.html` contain email
+addresses and prompt text. They are gitignored, and CI rejects them if tracked.
+Check exports and files saved under other names too.
 
-**The dashboard stays self-contained.** No CDN, no external stylesheet, no
-fetch. A unit test and a CI step both assert it.
+**Keep the dashboard offline.** Embed its data, styles, and charts in the HTML.
+Tests and CI check for external references.
 
-**Wrapper-span removal is load-bearing.** The rule in `collector.py` is "a
-*direct child* reports the *same* token counts". Broadening it to "is an
-ancestor of a token-bearing span" looks like a simplification and is a bug:
-under agent-as-tool nesting the outer call is a different call, and both sets of
-tokens were really consumed. Four tests pin this down.
+**Preserve the wrapper-span rule.** In `collector.py`, remove a span only when a
+direct child reports the same token counts. Other nested calls can consume tokens
+separately and must remain. The collector tests cover these cases.
 
-**Attribution joins are exact keys only.** A model call is attributed through
-its trace id, or through the session id its spans carry — identifiers the
-platform stamped on the data. Do not add attribution by time proximity or any
-other heuristic: a plausible guess that lands tokens on the wrong person is
-worse than an honest `(unattributed)`.
+**Match users by exact identifiers.** Attribution uses a matching trace ID or
+session ID from the source data. Do not assign users by timing alone or other
+guesses. Calls without a match stay `(unattributed)`.
 
-**Views are rebuilt on every connect; tables are not.** Changing a view needs
-nothing else. Adding a column needs an entry in `_ADDED_COLUMNS` so existing
-databases get it before any view references it.
+**Migrate table changes.** Views are rebuilt on every connection. New table
+columns need an entry in `_ADDED_COLUMNS` so existing databases receive them
+before a view uses them.
 
-**Timestamps are ISO-8601 UTC strings** compared lexicographically, which is why
-`day` and `hour` are `substr()` expressions.
+**Keep timestamps in UTC.** The database compares ISO-8601 strings directly and
+uses `substr()` to derive `day` and `hour`.
 
 ## Screenshots
 
@@ -51,9 +50,10 @@ python3 tools/make_demo_db.py --out demo.db
 python3 tools/capture_screenshots.py --db demo.db
 ```
 
-The generator is deterministic, so a regenerated image differs only where the
-rendering changed. If a crop lands mid-card, adjust `--splits`.
+The generator produces repeatable data. If a screenshot cuts through a card,
+adjust `--splits`.
 
 ## Commits
 
-Conventional-commit subject, then a body explaining why.
+Use a conventional-commit subject, such as `docs: clarify demo setup`, and explain
+the reason for the change in the body.

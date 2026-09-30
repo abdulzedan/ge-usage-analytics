@@ -87,8 +87,7 @@ jobs:
 
       - name: The dashboard is self-contained
         run: |
-          # It has to open on a workstation with no network access, so any
-          # external reference is a defect rather than a style preference.
+          # The dashboard must work offline without external resources.
           python - <<'PY'
           import pathlib, re, sys
           html = pathlib.Path("dashboard.html").read_text(encoding="utf-8")

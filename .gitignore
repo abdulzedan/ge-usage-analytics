@@ -10,8 +10,7 @@ collect.log
 dashboard.html
 /*.html
 
-# Documentation screenshots are generated from synthetic data and ARE tracked;
-# everything else image-shaped is not.
+# Track documentation screenshots made from synthetic data; ignore other PNGs.
 *.png
 !docs/images/*.png
 

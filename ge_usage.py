@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Gemini Enterprise usage analytics, collected locally without BigQuery.
+"""Demo for collecting Gemini Enterprise logs and token usage locally.
 
-Reads per-user token usage from Cloud Logging and Cloud Trace, joins the two on
-trace id, and stores the result in a local SQLite database that can be queried
-with SQL or rendered as an offline HTML dashboard.
+Reads Cloud Logging and Cloud Trace into SQLite, links calls to users by trace
+or session ID, and displays the results in SQL or an offline HTML dashboard.
+Intended for quick inspection and learning, not production use.
 
     ./ge_usage.py collect   --project YOUR_PROJECT_ID --days 30
     ./ge_usage.py stats
@@ -148,12 +148,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
     if total and pct < 100:
         print(
-            "  Calls that execute inside the StreamAssist request trace resolve directly;\n"
-            "  a call under its own trace id resolves only if its spans carry the Gemini\n"
-            "  Enterprise session. Deep Research's detached sub-agent calls currently carry\n"
-            "  neither key, and a custom agent (ADK on Agent Engine, or A2A on Cloud Run)\n"
-            "  carries none unless it stamps one, so those tokens are counted with no end\n"
-            "  user attached. See 'Attribution coverage' in the README."
+            "  Calls without a matching trace or session ID remain unattributed.\n"
+            "  Their tokens are included in the collected totals.\n"
+            "  See 'Attribution coverage' in the README."
         )
     conn.close()
     return 0
@@ -279,7 +276,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    """Serve the dashboard over localhost (handy inside a locked-down VDI)."""
+    """Serve the dashboard on localhost when file URLs are unavailable."""
     import functools
     import http.server
 
@@ -303,13 +300,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ge_usage.py",
-        description="Gemini Enterprise per-user token analytics from Cloud Logging + Cloud Trace (no BigQuery).",
+        description="Collect Gemini Enterprise logs and token usage for local inspection.",
+        epilog="Demonstration only. Not intended for production use.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--db", default=str(DEFAULT_DB), help=f"SQLite path (default: {DEFAULT_DB.name})")
     sub = p.add_subparsers(dest="command", required=True)
 
-    c = sub.add_parser("collect", help="pull telemetry from GCP into the local database")
+    c = sub.add_parser("collect", help="read Google Cloud logs and traces into SQLite")
     c.add_argument("--project", help="GCP project id")
     c.add_argument("--days", type=int, default=7, help="look back N days (default 7)")
     c.add_argument("--since", help="ISO start time, overrides --days")

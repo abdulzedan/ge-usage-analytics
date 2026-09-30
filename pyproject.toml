@@ -5,13 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ge-usage-analytics"
 version = "1.1.0"
-description = "Export Gemini Enterprise token and activity telemetry out of Google Cloud into a local SQLite database and an offline HTML dashboard."
+description = "Demo for collecting Gemini Enterprise logs and token usage in SQLite and viewing them offline. Not intended for production use."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 keywords = ["gemini-enterprise", "cloud-logging", "cloud-trace", "telemetry", "analytics", "sqlite"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: Apache Software License",
@@ -19,8 +18,7 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 
-# The tool itself has no runtime dependencies. It is written against the
-# standard library so it can be copied onto a locked-down host and run as-is.
+# Runtime code uses only the Python standard library.
 dependencies = []
 
 [project.optional-dependencies]
@@ -28,12 +26,9 @@ dev = ["pytest>=7.4", "ruff>=0.6"]
 # Only needed to regenerate the README screenshots (tools/capture_screenshots.py).
 docs = ["pillow>=10.0"]
 
-# A flat set of modules, not a package: the directory is meant to be copied onto
-# a host and run in place, so there is nothing for setuptools to auto-discover.
-# Declared so `pip install '.[dev]'` resolves, which is the only reason to
-# install this at all. There is deliberately no console script -- the default
-# database path sits beside the module, which is correct when the directory is
-# run in place and wrong when it has been installed into site-packages.
+# Declare the flat modules so pip can install the optional extras.
+# Run the CLI from the checkout: its default database lives beside ge_usage.py,
+# so an installed console script would write into site-packages.
 [tool.setuptools]
 py-modules = ["ge_usage", "gcp_client", "collector", "store", "dashboard"]
 

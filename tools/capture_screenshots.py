@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate the README screenshots from the synthetic demo database.
 
-The images in docs/images are produced by this script, so they can be rebuilt
-after a change to the dashboard rather than being re-cropped by hand. Because
-tools/make_demo_db.py is deterministic, a regenerated image differs only where
-the rendering actually changed.
+Writes cropped dashboard images to docs/images. Use tools/make_demo_db.py to
+create repeatable synthetic data before capturing them.
 
     python3 tools/make_demo_db.py --out demo.db
     python3 tools/capture_screenshots.py --db demo.db
@@ -13,7 +11,7 @@ Requires Google Chrome (headless) and Pillow:
 
     pip install '.[docs]'
 
-Neither this script nor the data it renders touches Google Cloud.
+This script does not contact Google Cloud.
 """
 
 from __future__ import annotations
@@ -41,7 +39,7 @@ CHROME_CANDIDATES = [
 # Where the page is split into separate images, in device pixels at 2x scale.
 # These land inside the blank gutters between cards; adjust if the dashboard
 # layout changes materially.
-DEFAULT_SPLITS = (2146, 4430)
+DEFAULT_SPLITS = (2196, 4474)
 
 VIEWPORT_WIDTH = 1440
 CAPTURE_HEIGHT = 4600

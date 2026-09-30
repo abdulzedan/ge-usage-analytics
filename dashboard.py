@@ -1,12 +1,7 @@
 """Render the local SQLite store as a self-contained offline HTML file.
 
-The output has no external references: data is embedded as JSON and charts are
-generated as inline SVG. It requires no CDN, no build step and no network access
-when viewed, so it opens correctly on an isolated workstation.
-
-The light and dark palettes are stepped independently and checked for
-colour-vision-deficiency separation and contrast against their respective chart
-surfaces.
+Data, SVG charts, and light and dark themes are embedded in the HTML. Viewing
+requires JavaScript but no network connection.
 """
 
 from __future__ import annotations
@@ -171,6 +166,7 @@ _TEMPLATE = r"""<!doctype html>
     <div>
       <h1>__TITLE__</h1>
       <div class="sub">__SUBTITLE__</div>
+      <div class="sub">Demonstration only. Not intended for production use.</div>
     </div>
     <div class="spacer"></div>
     <button class="ghost" id="themeBtn" type="button">Toggle theme</button>
@@ -209,7 +205,7 @@ _TEMPLATE = r"""<!doctype html>
       <h2>Token usage over time</h2>
       <button class="ghost toggle" type="button" data-view="daily">Table</button>
     </header>
-    <p class="desc">Input and output tokens per day, stacked. Hover a column for the breakdown.</p>
+    <p class="desc">Daily input and output tokens. Hover a column for details.</p>
     <div class="legend" id="legendDaily"></div>
     <div class="plot" id="plotDaily"></div>
     <div class="tablewrap hidden" id="tableDaily"></div>
@@ -221,7 +217,7 @@ _TEMPLATE = r"""<!doctype html>
         <h2>Tokens by user</h2>
         <button class="ghost toggle" type="button" data-view="user">Table</button>
       </header>
-      <p class="desc">Who is consuming the tokens, input vs output.</p>
+      <p class="desc">Input and output tokens by user.</p>
       <div class="legend" id="legendUser"></div>
       <div class="plot" id="plotUser"></div>
       <div class="tablewrap hidden" id="tableUser"></div>
@@ -232,7 +228,7 @@ _TEMPLATE = r"""<!doctype html>
         <h2>Tokens by model</h2>
         <button class="ghost toggle" type="button" data-view="model">Table</button>
       </header>
-      <p class="desc">Total tokens attributed to each model.</p>
+      <p class="desc">Total tokens by model.</p>
       <div class="plot" id="plotModel"></div>
       <div class="tablewrap hidden" id="tableModel"></div>
     </div>
@@ -242,8 +238,7 @@ _TEMPLATE = r"""<!doctype html>
         <h2>Chat turns by agent</h2>
         <button class="ghost toggle" type="button" data-view="agent">Table</button>
       </header>
-      <p class="desc">Distinct user turns handled by each agent. Deep Research and its research
-    sub-agents count as one.</p>
+      <p class="desc">Distinct chat turns by agent. Deep Research includes its sub-agents.</p>
       <div class="plot" id="plotAgent"></div>
       <div class="tablewrap hidden" id="tableAgent"></div>
     </div>
@@ -261,7 +256,7 @@ _TEMPLATE = r"""<!doctype html>
 
   <div class="card">
     <header><h2>Per-user detail</h2></header>
-    <p class="desc">Every value in the charts above, as numbers.</p>
+    <p class="desc">Per-user turn, call, and token totals.</p>
     <div class="tablewrap" id="tableUserDetail"></div>
   </div>
 
@@ -273,23 +268,21 @@ _TEMPLATE = r"""<!doctype html>
 
   <div class="card hidden" id="cardNblm">
     <header><h2>NotebookLM Enterprise activity</h2></header>
-    <p class="desc">From the NotebookLM Enterprise activity log: action counts only, over the whole
-    collected window. The log carries no token data, so nothing here contributes to the token
-    figures above, and the filter row does not apply.</p>
+    <p class="desc">Action counts for the full collected period. Filters above do not apply.
+    These actions are separate from token totals.</p>
     <div class="tablewrap" id="tableNblm"></div>
   </div>
 
   <div class="card hidden" id="cardNblmRecent">
     <header><h2>Recent NotebookLM actions</h2></header>
-    <p class="desc">Newest first. Chat-style actions carry the question that was asked.</p>
+    <p class="desc">Newest first, including prompts for chat actions.</p>
     <div class="tablewrap" id="tableNblmRecent"></div>
   </div>
 
   <footer class="note">
-    <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user identity, prompt)
-    joined to Cloud Trace <code>gen_ai.usage.*</code> span attributes (token counts) — on trace id,
-    or on session id where a call ran under its own trace but its spans name the session.
-    Times are UTC.</p>
+    <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user and prompt)
+    and Cloud Trace <code>gen_ai.usage.*</code> (tokens), matched by trace or session ID.
+    Totals cover collected spans only. Times are UTC.</p>
   </footer>
 </div>
 

@@ -1,8 +1,11 @@
 # Gemini Enterprise Usage Analytics
 
-Export Gemini Enterprise token and activity telemetry **out of Google Cloud** into
-a local SQLite database, and read it internally, either as SQL or as a self-contained
-HTML dashboard that opens with no network access.
+Pull Gemini Enterprise activity logs and token usage from Google Cloud into a
+local SQLite database. Query the data with SQL or view it in an offline HTML
+dashboard.
+
+> **Demonstration only. Not intended for production use.** Use this project to
+> learn how to pull Gemini Enterprise logs and traces for quick local inspection.
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
 
@@ -34,23 +37,20 @@ HTML dashboard that opens with no network access.
 
 ## 1. What this is for
 
-The usual way to report on Gemini Enterprise usage is to route logs into BigQuery
-and query them there or through Observability Analytics.
+Use this demo to collect a recent sample of Gemini Enterprise activity, inspect
+token usage, and see how logs and traces can be linked to users. It reads from
+Google Cloud and stores the results locally, without a BigQuery setup.
 
-This repository is for the case where you **cannot, or would rather not**, and
-the telemetry has to come *out* of Google Cloud and be read somewhere you control.
-
-**What it is not.** Not a real-time monitor, not a billing system of record, and
-not a multi-user service. It is a read-only exporter and a local reporting layer.
-See [Limits](#14-limits) for where it stops, and [Extending it](#15-extending-it)
-for what to do at that point.
+Start with [synthetic data](#5-try-it-without-a-google-cloud-project) to try the
+dashboard, or follow [First run](#6-first-run) to collect from your project.
+See [Limits](#14-limits) before interpreting the results.
 
 ---
 
 ## 2. Why two data sources are required
 
-Gemini Enterprise splits its telemetry across two Google Cloud services, and
-neither is sufficient on its own.
+The demo uses Cloud Logging for activity and user identity, and Cloud Trace for
+token counts.
 
 | Field | Where it is recorded | Service |
 |---|---|---|
@@ -61,19 +61,16 @@ neither is sufficient on its own.
 | Tool invocations and latency | `gen_ai.tool.name`, span timings | Cloud Trace |
 | NotebookLM Enterprise actions | `notebooklm_enterprise_user_activity` log (opt-in) | Cloud Logging |
 
-Token counts do not appear in the user-activity log, which is why a log-only
-approach produces activity counts and no tokens. (August 2026 release notes
-describe an experimental `gen_ai.*` log family that carries usage attributes;
-it was absent from the projects this tool was built against, so Cloud Trace
-remains the dependable source.)
+The user-activity log supplies activity counts, not token counts. This tool reads
+tokens from Cloud Trace. The experimental `gen_ai.*` usage logs described in the
+August 2026 release notes were not present in the projects used to develop it.
 
-Both services stamp the same W3C trace id on their records. Joining on that id
-reconstructs *account → prompt → model → tokens*. This tool performs that join
-locally, on the trace id and, where a call ran under its own trace, on the
-session id (see [Attribution coverage](#11-attribution-coverage)).
+Matching trace IDs link the account and prompt to the model call and its tokens.
+When trace IDs differ, the tool also checks for a matching session ID. See
+[Attribution coverage](#11-attribution-coverage) for how the joins work.
 
-NotebookLM is the exception: a separate log, disabled by default, with no
-token counterpart in Cloud Trace. See
+NotebookLM uses a separate activity log, disabled by default. The demo reports
+its actions separately from token usage. See
 [NotebookLM Enterprise](#12-notebooklm-enterprise).
 
 ---
@@ -82,13 +79,14 @@ token counterpart in Cloud Trace. See
 
 | Requirement | Detail |
 |---|---|
-| Python | 3.9 or later. Standard library only, nothing to install. |
+| Python | 3.9 or later. No third-party runtime packages. |
 | Google Cloud CLI | `gcloud`, authenticated. Used to obtain access tokens. |
 | APIs enabled | Cloud Logging API, Cloud Trace API. |
-| IAM roles | `roles/logging.viewer` and `roles/cloudtrace.user`. Both read-only. |
+| IAM roles | `roles/logging.viewer` and `roles/cloudtrace.user` on the target project. |
 
-The tool never writes to Google Cloud. It issues read requests only, and the two
-roles above grant no mutating permissions.
+The collector only reads from Google Cloud. The Cloud Trace User role also grants
+permissions to manage Trace tasks and scopes; it is not a strictly read-only role.
+See [Cloud Trace permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/cloudtrace).
 
 ### Confirming prerequisites
 
@@ -119,22 +117,24 @@ chmod +x ge_usage.py
 python3 ge_usage.py --help
 ```
 
-There is no build step, virtual environment or dependency installation. That is
-deliberate: the host allowed to hold this data is often the one least able to
-install packages.
+Running the tool requires no build step, virtual environment, or dependency
+installation. Development and screenshot tools have optional dependencies.
 
 ---
 
 ## 5. Try it without a Google Cloud project
 
-To see the dashboard before arranging any access:
+To try the dashboard with synthetic data:
 
 ```bash
 make demo
 ```
 
-This invents a month of plausible activity, renders it and opens the result. The
-generator is deterministic and touches nothing outside the working directory.
+This generates a month of synthetic activity, writes `demo.db` and
+`demo-dashboard.html`, and opens the dashboard. It does not contact Google Cloud.
+The generator produces the same data for the same options and seed.
+
+To run the steps directly:
 
 ```bash
 python3 tools/make_demo_db.py --out demo.db --turns 420 --days 30
@@ -175,26 +175,26 @@ attributed to a user: 121/620 model calls (19.5%)
   121 via trace id · 0 via session id
 ```
 
-Then:
+View a summary or open the dashboard:
 
 ```bash
 python3 ge_usage.py stats             # per-user summary in the terminal
 python3 ge_usage.py dashboard --open  # write dashboard.html and open it
 ```
 
-> Collection is **additive and idempotent**. Re-running it over the same window
-> updates existing rows rather than duplicating them, so overlapping runs are safe.
+Repeated collection updates matching rows without duplicating them. Records
+outside the collection window stay in the local database.
 
-If the attribution percentage looks low, that is expected and explained in
-[Attribution coverage](#11-attribution-coverage). Total token figures are complete
-either way.
+Calls without a user match still contribute to token totals. Those totals cover
+the spans collected, which may be limited by sampling, retention, and enabled
+logging. See [Attribution coverage](#11-attribution-coverage).
 
 ---
 
 ## 7. Command reference
 
-All commands accept `--db PATH` to use a database other than the default
-`usage.db`.
+Place `--db PATH` before the command to use a database other than the default
+`usage.db`, for example `python3 ge_usage.py --db demo.db stats`.
 
 ### `collect`
 
@@ -256,26 +256,22 @@ python3 ge_usage.py serve --port 8777 --open
 
 ## 8. The dashboard
 
-`dashboard.html` is a single file with **no external references**. Data is
-embedded as JSON, charts are inline SVG, styling is one `<style>` element. No CDN,
-no build step and no network access are needed to view it. CI asserts this on every
-push, because it is the property the whole format depends on.
+`dashboard.html` contains its data, charts, and styles in one file. It needs
+JavaScript but no network connection to view.
 
-A single filter row (range, surface, user, model, agent) scopes every chart at
-once. The agent dimension folds Deep Research and its sub-agents into one
-entry, so one filter answers who uses it most. Each chart has a **Table**
-button that shows the same figures as numbers.
+Filter token charts by date range, surface, user, model, or agent. Deep Research
+and its sub-agents share one agent filter. Each chart has a **Table** button for
+viewing the numbers. NotebookLM tables cover the full collected period and are
+not affected by these filters.
 
 ![Breakdowns by agent and by hour](docs/images/dashboard-breakdowns.png)
 
-Underneath the charts, the per-user detail table carries every value in the charts
-as numbers, and the recent-activity table lists the most recent turns with their
+Below the charts, tables show per-user totals and recent chat turns with their
 prompts.
 
 ![Per-user detail and recent activity](docs/images/dashboard-tables.png)
 
-Light and dark palettes are stepped independently, so both hold up on their own
-chart surfaces.
+Use **Toggle theme** to switch between light and dark themes.
 
 ![Dark theme](docs/images/dashboard-dark.png)
 
@@ -318,7 +314,7 @@ ORDER BY 1;
 ```
 
 ```sql
--- Most expensive individual turns
+-- Turns with the most tokens
 SELECT trace_id,
        user_principal,
        SUM(total_tokens) AS tokens,
@@ -347,21 +343,23 @@ GROUP BY 1
 ORDER BY avg_ms DESC;
 ```
 
-Because the store is ordinary SQLite, any SQLite-compatible client works too: DB
-Browser for SQLite, Excel via ODBC, pandas, Metabase, or a Looker Studio extract.
+You can also open the database with a SQLite client or export query results as
+CSV for another reporting tool.
 
 ---
 
 ## 10. Scheduling regular collection
 
-Cloud Trace and the `_Default` log bucket both retain data for **30 days**. Older
-records are unavailable from the APIs at any price.
+These examples show how repeated collection can keep a local history during a
+demo. They are not a production collection service.
 
-Because collection is additive, running it on a schedule builds a local history
-that extends past that window.
+[Cloud Trace retention](https://docs.cloud.google.com/trace/docs/quotas#trace_retention_periods)
+is 30 days. The project's `_Default` log bucket also defaults to 30 days, but
+[log retention is configurable](https://docs.cloud.google.com/logging/quotas#logs_retention_periods).
+Collection cannot recover records that have expired.
 
-**Linux / macOS (cron)**, daily at 06:17, with a two-day overlap so a missed run
-does not leave a hole:
+**Linux / macOS (cron):** daily at 06:17, with a two-day window to cover one missed
+daily run:
 
 ```cron
 17 6 * * * cd /path/to/ge-usage-analytics && /usr/bin/python3 ge_usage.py collect --project YOUR_PROJECT_ID --days 2 >> collect.log 2>&1
@@ -375,8 +373,8 @@ Arguments: ge_usage.py collect --project YOUR_PROJECT_ID --days 2
 Start in:  C:\path\to\ge-usage-analytics
 ```
 
-Scheduled runs need valid credentials. On an unattended host, authenticate a
-service account holding the two read-only roles:
+Scheduled runs need valid credentials. If using a service account key for the
+demo, activate an account with the roles listed in [Requirements](#3-requirements):
 
 ```bash
 gcloud auth activate-service-account --key-file=/path/to/key.json
@@ -386,42 +384,36 @@ gcloud auth activate-service-account --key-file=/path/to/key.json
 
 ## 11. Attribution coverage
 
-Not every model call can be linked to a named user. Read the figures
-accordingly: **token totals are complete; the per-user split is a floor.**
+Not every model call can be linked to a named user. Token totals include all
+collected calls; per-user totals include only calls with a matching user.
 
 A model call is attributed through one of two exact keys. The `usage` view
 records which one matched in `attributed_via`.
 
-**Via trace id.** Core-assistant turns emit their `generate_content` spans
-inside the same trace as the `StreamAssist` request, so the span joins
-straight to the log entry that names the account.
+**Via trace ID.** Core-assistant `generate_content` spans share the
+`StreamAssist` request's trace ID, linking them to the account in the log entry.
 
-**Via session id.** A call under its own trace still resolves when its spans
-carry the Gemini Enterprise session in `gen_ai.conversation.id`; a session
-belongs to exactly one signed-in account. The tool takes the session's latest
-turn at or before the span, falling back to its first later one because a
-long-running turn can be logged after its work begins. This is the key an
-agent team controls: stamp the session, or propagate `traceparent`, and
-attribution follows with no change to this tool.
+**Via session ID.** A call with a different trace ID can match through
+`gen_ai.conversation.id` when it contains the Gemini Enterprise session ID.
+The tool uses the session's latest turn at or before the span. If none exists,
+it uses the first later turn, since a long-running turn can be logged after its
+work begins. Custom agents need to pass a matching trace or session ID for
+this attribution to work.
 
-**Unattributed.** Everything that carries neither key. A custom agent (ADK on
-Agent Engine, A2A on Cloud Run) runs under its own trace, receives no trace
-context from Gemini Enterprise, and its default conversation id is its own
-Agent Engine session. Its tokens are counted accurately with no user attached.
-Nothing is ever attributed by time proximity, so `(unattributed)` means
-exactly that.
+**Unattributed.** Calls that match neither key remain `(unattributed)`. In the
+projects used to develop this tool, custom agents ran under separate traces
+without the Gemini Enterprise session ID. Their collected tokens are included,
+but no user is assigned. The tool does not guess a user based on timing alone.
 
 ### Deep Research
 
-Observed on a live project (August 2026): the request is one logged
-StreamAssist turn; the planner and a minority of sub-agent calls execute
-inside that turn's trace and resolve; the remaining sub-agents run detached
-with **no session id either**, so they stay unattributed under their own
-`deep_research_child_N` names. Their tokens are fully counted. If a platform
-update stamps either key on those spans, they start resolving with no change
-to this tool.
+In an August 2026 project run, the planner and some sub-agent calls shared the
+logged `StreamAssist` trace and matched a user. Other sub-agents had separate
+traces and no matching session ID. These calls remained unattributed under their
+`deep_research_child_N` names, with their tokens included in the totals. Calls
+that provide either matching key can use the existing joins.
 
-Per-agent coverage is one query:
+Check attribution by agent:
 
 ```sql
 SELECT agent, surface, model_calls, via_trace, via_session,
@@ -438,16 +430,15 @@ ORDER BY total_tokens DESC;
 | deep_research_child_2 | Gemini Enterprise | 14 | 3 | 0 | 11 | 618,508 |
 | deep_research | Gemini Enterprise | 14 | 14 | 0 | 0 | 94,715 |
 
-*From the synthetic demo data: Claims Coordinator stamps nothing, Contract
-Review stamps the session and resolves fully, Deep Research resolves only
-inside the request trace.*
+This synthetic example shows three cases: Claims Coordinator has no matching
+key, Contract Review matches by session, and Deep Research matches only for
+calls in the request trace.
 
-The per-child grain is for diagnosing coverage. For ranking people, the
-`agent_group` column folds the family into one entity; the dashboard's agent
-dimension uses it too:
+Use `agent` to inspect individual sub-agents. Use `agent_group` to report on
+Deep Research as a group, as the dashboard does:
 
 ```sql
--- Who uses Deep Research the most (the attributed floor)
+-- Deep Research token usage by user, including unattributed calls
 SELECT user_principal, COUNT(*) AS calls, SUM(total_tokens) AS tokens
 FROM usage
 WHERE agent_group = 'Deep Research'
@@ -455,26 +446,26 @@ GROUP BY 1
 ORDER BY tokens DESC;
 ```
 
-The residual gap is platform telemetry, not the collection method. The same
-split appears in any pipeline built on these sources, **including a
-BigQuery-based one**. Closing it requires the spans to carry a key; see
+Changing the storage destination does not supply missing user identifiers.
+Attribution requires a matching key in the source data; see
 [Extending it](#15-extending-it).
 
 ---
 
 ## 12. NotebookLM Enterprise
 
-NotebookLM writes to a different log, and that log is off until someone turns
-it on. (Google renamed the product *Gemini Notebook Enterprise* in July 2026;
-the APIs and the log id keep the old name.)
+Gemini Notebook Enterprise uses the log ID
+`notebooklm_enterprise_user_activity`. The API and this tool retain the
+NotebookLM name.
 
-**A separate, opt-in log.** NotebookLM records user activity to
-`notebooklm_enterprise_user_activity`. Logging is disabled by default and is
-enabled for the whole project, unlike the Gemini Enterprise observability
-toggles, which sit on the app or agent. Enabling is a one-time admin action
-requiring `roles/discoveryengine.agentspaceAdmin`; reading needs only the
-`roles/logging.viewer` the tool already uses. Per
-[the setup documentation](https://docs.cloud.google.com/gemini/enterprise/notebooklm-enterprise/docs/set-up-usage-audit-logs-for-nblme):
+Logging is disabled by default and is enabled per project, rather than per app
+or agent. Enabling it requires `roles/discoveryengine.agentspaceAdmin`; reading
+it uses `roles/logging.viewer`.
+
+The following command changes project settings and enables prompt logging.
+An administrator should run it only when that data collection is appropriate.
+The collector does not enable logging itself. See
+[Google's setup instructions](https://docs.cloud.google.com/gemini/enterprise/notebooklm-enterprise/docs/set-up-usage-audit-logs-for-nblme):
 
 ```bash
 curl -X PATCH \
@@ -494,32 +485,27 @@ curl -X PATCH \
   }'
 ```
 
-`ENDPOINT_LOCATION` is `us`, `eu` or `global`. `sensitiveLoggingEnabled` is
-what captures prompt text. Nothing is written retroactively, so enable it well
-before the numbers are needed.
+`ENDPOINT_LOCATION` is `us`, `eu`, or `global`. `sensitiveLoggingEnabled`
+controls prompt capture. Only activity after logging is enabled is recorded.
 
-**What the log carries.** The acting account, the action
-(`GenerateFreeFormStreamed` for a chat question, `UploadSourceFile`,
-`CreateNotebook`, sharing; the documentation lists these prefixed with their
-service, the entries carry the bare name), the notebook, and the prompt for
-chat-style actions. **There are no token counts**, and NotebookLM emits no
-`gen_ai.usage.*` spans into Cloud Trace. Any pipeline, BigQuery included, can
-*count* NotebookLM usage but cannot *meter* it.
+The log records the account, action, notebook, and prompts for chat actions.
+Examples include `GenerateFreeFormStreamed`, `UploadSourceFile`, `CreateNotebook`,
+and sharing actions. Documentation prefixes action names with the service;
+observed entries use the bare method name.
 
-`collect` pulls the log on every run (a project that never enabled it
-contributes nothing), rows land in `notebooklm_activity`, and reporting is
-activity-based: the `notebooklm_by_user` view, a section in `stats`, and two
-dashboard cards, the per-user rollup and the most recent actions with their
-prompts. `--redact-queries` strips those prompts like any other. No token
-figure in the tool is affected by any of it.
+`collect` reads this log into `notebooklm_activity`. View counts by user in
+`notebooklm_by_user` or `stats`, and recent actions with prompts in the dashboard.
+`--redact-queries` removes these prompts from the generated HTML. The demo reports
+NotebookLM activity only; it does not collect NotebookLM token counts or add
+these actions to token totals.
 
 ---
 
 ## 13. Data model
 
-Four fact tables and four views.
+Four activity tables and four reporting views, plus a metadata table.
 
-| Table | Grain | Source |
+| Table | Each row represents | Source |
 |---|---|---|
 | `turns` | One user chat turn | Cloud Logging |
 | `model_calls` | One LLM call | Cloud Trace |
@@ -539,27 +525,27 @@ One row per model call. The primary reporting view.
 | `attributed_via` | `trace`, `session`, or NULL: the key that resolved it |
 | `query_text` | Prompt text, where available |
 | `agent`, `engine`, `session_id` | Routing context |
-| `agent_group` | `agent`, with the Deep Research fan-out folded into one entity |
+| `agent_group` | Agent name, with Deep Research and its sub-agents grouped together |
 | `surface` | `Gemini Enterprise` or `Agent Engine` |
 | `model` | Model name |
-| `input_tokens`, `output_tokens`, `total_tokens` | Consumption |
+| `input_tokens`, `output_tokens`, `total_tokens` | Recorded token counts |
 | `latency_ms` | Call duration |
 
 ### View: `usage_by_user`
 
-Pre-aggregated per account: call and turn counts, session and active-day counts,
+Totals per account: call and turn counts, session and active-day counts,
 token totals, average per call, and first and last activity timestamps.
 
 ### View: `usage_by_agent`
 
 Per agent and surface: calls, turns, attributed calls split by method
 (`via_trace` / `via_session`), token totals, and first and last activity. A
-partially-attributed agent such as Deep Research shows up as such here.
+partially attributed agent such as Deep Research can be inspected here.
 
 ### View: `notebooklm_by_user`
 
 Per account: activity count, distinct notebooks, active days, first and last
-seen. Separate from the token views; there are no token numbers to join it to.
+seen. This view reports activity counts only.
 
 All timestamps are **UTC**.
 
@@ -569,8 +555,9 @@ All timestamps are **UTC**.
 
 ### Volume
 
-Measured with the synthetic generator: roughly **675 bytes per model call** in
-SQLite and **232 bytes per model call** in the rendered dashboard:
+Earlier synthetic-data measurements used roughly **675 bytes per model call**
+in SQLite and **232 bytes per model call** in the dashboard. These are examples,
+not capacity guarantees:
 
 | Model calls | Database | Dashboard HTML | Verdict |
 |---|---|---|---|
@@ -579,27 +566,20 @@ SQLite and **232 bytes per model call** in the rendered dashboard:
 | 37,000 | 24 MB | 8.2 MB | comfortable |
 | 148,000 | 96 MB | 33 MB | SQL fine, dashboard impractical |
 
-**SQLite is not the constraint.** At 148,000 model calls, `usage_by_user` returns
-in 175 ms and a daily rollup in 70 ms on an ordinary laptop.
-
-**The dashboard is.** It embeds every row as JSON and recomputes every chart in
-JavaScript whenever a filter changes. Past roughly **50,000 model calls (~12 MB)**
-the page is noticeably slow to load and filter; past ~150,000 it is not worth
-opening. At that point use `query --format csv`, or move the data somewhere built
-for it. See [Extending it](#15-extending-it).
-
-For scale, 50,000 model calls is on the order of a hundred active users for a
-month, or a handful of users driving heavily-grounded agents.
+In those measurements, SQL queries at 148,000 calls took 175 ms for
+`usage_by_user` and 70 ms for a daily total. The dashboard slowed around 50,000
+calls (~12 MB) because it embeds every row and recalculates charts in the browser.
+Performance depends on the data and machine. For larger samples, use
+`query --format csv` or a separate reporting system. See [Extending it](#15-extending-it).
 
 ### Source-side limits
 
-- **30-day retention.** Cloud Trace and the `_Default` log bucket both drop
-  records after 30 days, so nothing older can be collected retrospectively.
-- **Attribution** is bounded by the identifiers the platform stamps (trace id,
-  session id), not by this tool. See [section 11](#11-attribution-coverage).
-- **NotebookLM has no token counts, anywhere.** Its log records who did what,
-  and it emits no `gen_ai.usage.*` spans into Cloud Trace. Activity is the
-  most any pipeline can report for it, and only after its logging is enabled.
+- **Retention.** Expired records cannot be retrieved. Cloud Trace retains
+  spans for 30 days; log retention depends on the bucket configuration. See
+  [Scheduling regular collection](#10-scheduling-regular-collection).
+- **Attribution.** User matches depend on trace and session IDs in the source
+  data. See [section 11](#11-attribution-coverage).
+- **NotebookLM.** This demo reports activity only, after logging is enabled.
   See [NotebookLM Enterprise](#12-notebooklm-enterprise).
 - **Cloud Trace sampling.** If a project samples traces, token counts reflect the
   sampled population. This tool reports what the APIs return.
@@ -608,24 +588,26 @@ month, or a handful of users driving heavily-grounded agents.
 
 ## 15. Extending it
 
-Two seams matter.
+The code separates collection from storage:
 
-**`collector.py` returns plain dictionaries.** `collect_turns()` and
-`collect_spans()` do the Google Cloud reads and the trace-id join, and hand back
-`list[dict]`. They know nothing about SQLite.
+- `collector.py` reads and parses Google Cloud responses. `collect_turns()`,
+  `collect_spans()`, and `collect_notebooklm_activity()` return dictionaries.
+- `store.py` writes those rows to SQLite through `upsert_turns()`,
+  `upsert_model_calls()`, `upsert_tool_calls()`, and `upsert_notebooklm_activity()`.
+  Its `usage` view performs the trace and session joins.
 
-**`store.py` is the only thing that writes.** `upsert_turns()`,
-`upsert_model_calls()` and `upsert_tool_calls()` each take that same
-`list[dict]`.
+The ideas below require additional implementation and testing. They do not make
+this demo ready for production.
 
 ### Point it at your own database
 
-Replace `store.py` with an equivalent module for Postgres, MySQL, DuckDB,
-ClickHouse or a warehouse, keeping the three `upsert_*` signatures. Nothing else
-changes; `ge_usage.py collect` will write to the new destination unmodified.
+To use another database, implement the storage interface and adapt the schema,
+views, and queries used by the CLI and dashboard. Keeping the `upsert_*`
+signatures helps reuse the collector, but replacing those functions alone is
+not enough. A PostgreSQL upsert could follow this pattern (incomplete example):
 
 ```python
-# store_postgres.py: same three entry points, different destination
+# store_postgres.py: sketch only; define columns, SQL, and connection handling
 def upsert_model_calls(conn, rows):
     execute_values(conn.cursor(), """
         INSERT INTO model_calls (span_id, trace_id, start_time, model,
@@ -636,64 +618,59 @@ def upsert_model_calls(conn, rows):
     return len(rows)
 ```
 
-This is the answer to the volume ceiling in [Limits](#14-limits): once the data is
-in a real database, the dashboard stops being the reporting surface and your BI
-tool takes over.
+For larger datasets, use a reporting tool that queries the destination database
+instead of embedding every row in an HTML file.
 
 ### Export instead of replacing
 
-If a full backend swap is more than you need, the store is ordinary SQLite:
+To export without changing the storage code:
 
 ```bash
 python3 ge_usage.py query "SELECT * FROM usage" --format csv > usage.csv
 sqlite3 usage.db ".dump" > usage.sql
 ```
 
-Either lands in a warehouse, and both preserve the trace-id join that was the hard
-part.
+The CSV contains the joined `usage` rows. The SQL dump includes the stored tables
+and views; importing it elsewhere may require adapting SQLite syntax.
 
 ### Other directions
 
-- **Multi-project.** Add a `project` column to the three tables, set it during
-  collection, and run one collection per project against one shared database.
-- **Cost allocation.** Join a price-per-million-tokens table on `model` and
-  `surface` to turn the token columns into a chargeback report. The grain is
-  already right.
-- **Point a BI tool at it.** Metabase, Superset and Tableau all read SQLite
-  directly; Looker Studio needs an extract. Charting `usage` and `usage_by_user`
-  gets you most of the dashboard for free, with a server and access control.
-- **Feed an existing observability stack.** If Splunk, Elastic or Datadog is
-  already the internal surface, emit the joined rows there instead of rendering
-  HTML. The join is the value, not the charts.
-- **Close the attribution gap.** Propagate W3C `traceparent` from Gemini
-  Enterprise into your custom agents, or have the agent stamp the Gemini
-  Enterprise session on its spans' `gen_ai.conversation.id`. Either way, every
-  Agent Engine call resolves to a named user with no change to this tool. Two
-  identifiers to watch: ADK 2.1's content-capture opt-in records `user.id`,
-  and StreamAssist tool spans carry a documented
-  `gemini_enterprise.assist_token` attribute, so far seen only inside the
-  request trace, where the trace join already wins.
-- **Alerting.** `query` returns a shell-friendly exit and CSV; a threshold check on
-  a schedule is a few lines of cron.
-- **Host the dashboard.** `serve` already binds `127.0.0.1`. Putting it behind an
-  internal reverse proxy with authentication makes it a small internal service.
+- **Multiple projects.** Add project identifiers to the four activity tables,
+  keys, metadata, and joins before collecting several projects into one database.
+- **Cost estimates.** Join a pricing table on `model` and `surface`. Validate the
+  pricing rules and collection coverage before using the result; token totals
+  here are not a billing record.
+- **BI reports.** Export `usage` and `usage_by_user`, or use a reporting tool
+  with a suitable SQLite connector.
+- **Other log systems.** Send joined rows to an existing system such as Splunk,
+  Elastic, or Datadog through an adapter you implement.
+- **Attribution.** Where supported, pass W3C `traceparent` to custom agents or
+  include the Gemini Enterprise session ID in `gen_ai.conversation.id`. Verify
+  that it matches a collected turn. Other identifiers to investigate include
+  `user.id` and `gemini_enterprise.assist_token`; this tool does not join on them.
+- **Alerts.** A script can check query results against a threshold. Scheduling,
+  delivery, and failure handling would need to be added.
+- **Shared dashboards.** `serve` binds to `127.0.0.1` for local viewing. Shared
+  hosting would need a separate design for authentication and data access.
 
 ---
 
 ## 16. Security and data handling
 
-- **Read-only.** The tool makes no write calls to Google Cloud. The two required
-  IAM roles grant no mutating permissions.
+- **Cloud access.** The collector makes read requests only. The optional
+  NotebookLM setup command changes project settings. IAM roles may grant more
+  permissions than collection needs; see [Requirements](#3-requirements).
 - **Data stays local.** Collected data is written only to the local SQLite file and
   the generated HTML. Nothing is transmitted anywhere else.
 - **Sensitive content.** `usage.db` and `dashboard.html` contain user email
   addresses and prompt text. Treat both as confidential. The supplied `.gitignore`
   excludes them, and CI fails if either is ever committed.
-- **Redaction.** `dashboard --redact-queries` omits prompt text, for a dashboard
-  intended for wider circulation. It removes the text from the embedded data, not
-  merely from the table.
-- **Credentials.** None are stored. Access tokens are obtained from `gcloud` at
-  runtime and held in memory only.
+- **Redaction.** `dashboard --redact-queries` removes prompt text from the HTML,
+  including its embedded data. User identities remain, and the database is
+  unchanged. Review the output before sharing it.
+- **Credentials.** The tool keeps access tokens in memory and does not write them
+  to the database or dashboard. Tokens come from `gcloud` or
+  `GOOGLE_OAUTH_ACCESS_TOKEN`; `gcloud` manages its own stored credentials.
 
 ---
 
@@ -719,7 +696,7 @@ gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 
 **Collection returns 0 turns**
 Confirm the project serves Gemini Enterprise traffic and that the window covers a
-period with activity. Widen it with `--days 30`. Data older than 30 days is gone.
+period with activity. Widen it with `--days 30` and check the log bucket's retention.
 User activity is only logged while the observability settings are on (for managed
 agents such as Deep Research, the toggle sits on the agent itself).
 
@@ -750,7 +727,9 @@ page requires JavaScript. If the database is very large, see
 [Limits](#14-limits).
 
 **Starting over**
-Delete `usage.db` and re-run `collect`. Nothing in Google Cloud is affected.
+Back up `usage.db` if you need its history, then delete it and re-run `collect`.
+Expired source data cannot be collected again. Deleting the local database does
+not change Google Cloud data.
 
 ---
 
@@ -761,7 +740,7 @@ Delete `usage.db` and re-run `collect`. Nothing in Google Cloud is affected.
    one `turns` row per chat turn, keyed by trace id and carrying the session.
 
 2. **Cloud Trace** is queried via `traces.list` with `view=COMPLETE`, which returns
-   every span of a matching trace together with its labels in a single request.
+   the spans and labels of matching traces in paginated responses.
    Spans carrying `gen_ai.usage.*` become `model_calls`; spans carrying
    `gen_ai.tool.name` become `tool_calls`.
 
@@ -770,14 +749,12 @@ Delete `usage.db` and re-run `collect`. Nothing in Google Cloud is affected.
    token counts. Counting both would overstate consumption. A span is discarded
    when a *direct child* reports the *same* token counts.
 
-   The rule is deliberately narrow. Discarding every token-bearing ancestor would
-   be wrong: under agent-as-tool nesting, an outer `generate_content` contains a
-   genuinely different inner call beneath its `execute_tool` span, and both sets of
-   tokens were really consumed.
+   Keep other nested model calls: an outer `generate_content` can contain a
+   separate model call beneath an `execute_tool` span. Both calls consume tokens.
 
 4. **Cloud Logging is queried once more** for `notebooklm_enterprise_user_activity`
    entries, producing `notebooklm_activity` rows keyed by insert id. A project
-   that has not enabled that logging simply matches nothing.
+   with logging disabled returns no activity entries.
 
 5. **Everything is written with `INSERT OR REPLACE`**, which makes repeated
    runs idempotent. The `usage` view joins model calls to turns on trace id,
@@ -809,11 +786,10 @@ make test
 make lint
 ```
 
-The test suite runs without credentials or network access. `urlopen` is replaced
-throughout, and the Google Cloud calls are stubbed. CI additionally runs an
-end-to-end job that builds a synthetic database, renders it, and asserts both that
-the generator is byte-for-byte reproducible and that the output carries no external
-reference.
+Tests use mocked Google Cloud responses and need no credentials or network
+access. CI also generates a synthetic database, checks that repeated generation
+produces identical files, and verifies that the dashboard has no external
+references.
 
 Tests run on Python 3.9 through 3.13.
 

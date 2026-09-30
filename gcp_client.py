@@ -1,13 +1,10 @@
 """REST clients for Cloud Logging and Cloud Trace.
 
-Implemented against the Python standard library only (urllib, json, subprocess)
-so the tool runs on any machine with the gcloud CLI installed and requires no
-package installation.
+Uses the Python standard library (urllib, json, subprocess).
 
 Authentication uses an OAuth access token from `gcloud auth print-access-token`,
-or the GOOGLE_OAUTH_ACCESS_TOKEN environment variable when a token is supplied
-externally. Tokens expire after roughly one hour; the client refreshes once on a
-401 response and retries.
+or GOOGLE_OAUTH_ACCESS_TOKEN. On a 401 response, the client obtains a fresh
+token from gcloud and retries once.
 """
 
 from __future__ import annotations
@@ -58,7 +55,7 @@ def _gcloud_token() -> str:
 
 
 class GcpClient:
-    """Minimal authenticated JSON client for the two APIs we need."""
+    """Authenticated JSON client for Cloud Logging and Cloud Trace."""
 
     def __init__(self, project: str, quota_project: str | None = None) -> None:
         self.project = project

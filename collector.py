@@ -1,20 +1,11 @@
 """Collect Gemini Enterprise usage telemetry from Cloud Logging and Cloud Trace.
 
-Neither source is sufficient on its own:
+Cloud Logging supplies the account (`jsonPayload.userIamPrincipal`), prompt,
+agent, and session from `gemini_enterprise_user_activity`. Cloud Trace supplies
+token counts (`gen_ai.usage.*`) and model names (`gen_ai.request.model`).
 
-* Cloud Logging identifies the caller. The `gemini_enterprise_user_activity` log
-  records `jsonPayload.userIamPrincipal` (the signed-in account), the prompt text,
-  the answering agent and the session. It carries no token counts.
-* Cloud Trace records consumption. Spans named `generate_content <model>` carry
-  `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` and
-  `gen_ai.request.model` as span labels. They carry no user identity.
-
-Both stamp the same W3C trace id, so joining on it reconstructs
-user -> prompt -> model -> tokens. Where a call runs under its own trace id,
-the `gen_ai.conversation.id` label on its spans -- when the emitter stamps
-one -- is the remaining exact link back to the session, and the session's
-turns name the account. This module collects and parses both sides; the join
-itself is the `usage` view in store.py.
+This module parses both sources. The `usage` view in store.py joins them by
+trace ID, then by session ID from `gen_ai.conversation.id` when available.
 """
 
 from __future__ import annotations
@@ -30,10 +21,8 @@ USER_ACTIVITY_LOG = (
     "discoveryengine.googleapis.com%2Fgemini_enterprise_user_activity"
 )
 
-# NotebookLM Enterprise writes to its own log, not to the one above, and only
-# after user-activity logging has been switched on for the project. Entries
-# record who did what, and the prompt for chat-style actions. They carry no
-# token counts, and no other surface exposes NotebookLM token consumption.
+# NotebookLM activity logging must be enabled per project. Entries include
+# accounts, actions, and chat prompts; this collector reads no NotebookLM tokens.
 NOTEBOOKLM_ACTIVITY_LOG = (
     "discoveryengine.googleapis.com%2Fnotebooklm_enterprise_user_activity"
 )
@@ -249,18 +238,15 @@ def _span_tokens(span: dict[str, Any]) -> tuple[int, int] | None:
 
 
 def _wrapper_span_ids(spans: list[dict[str, Any]]) -> set[str]:
-    """Span ids that merely *re-report* a direct child's token counts.
+    """Find spans that repeat a direct child's token counts.
 
     An ADK agent on Agent Engine wraps every Gemini call in a `call_llm` span and
     emits `generate_content` beneath it. Both carry identical `gen_ai.usage.*`
     labels, so summing every token-bearing span double counts those calls.
 
-    The discriminator is "same token counts as a direct child", not "is an
-    ancestor of a token-bearing span". The distinction is significant: under
-    agent-as-tool nesting an outer `generate_content` contains a *different*
-    inner LLM call beneath its `execute_tool` span, and both sets of tokens were
-    genuinely consumed. Discarding every token-bearing ancestor would drop those
-    legitimate calls; matching on equal counts removes only true wrappers.
+    Only remove a span when a direct child reports the same counts. An outer
+    `generate_content` can contain a separate model call beneath `execute_tool`;
+    both calls consume tokens and must remain.
     """
     children: dict[str, list[dict[str, Any]]] = {}
     for span in spans:
