@@ -1,11 +1,12 @@
 """Local SQLite store for Gemini Enterprise usage telemetry.
 
-Four activity tables:
+Five activity tables:
 
-  turns                one row per user chat turn      (source: Cloud Logging)
-  model_calls          one row per LLM call            (source: Cloud Trace span attributes)
-  tool_calls           one row per tool execution      (source: Cloud Trace span attributes)
-  notebooklm_activity  one row per NotebookLM action   (source: Cloud Logging)
+  turns                 one row per user chat turn      (source: Cloud Logging)
+  model_calls           one row per LLM call            (source: Cloud Trace span attributes)
+  tool_calls            one row per tool execution      (source: Cloud Trace span attributes)
+  notebooklm_activity   one row per NotebookLM action   (source: Cloud Logging)
+  antigravity_requests  one row per Antigravity request (source: Cloud Logging)
 
 The `usage` view links model calls to accounts by matching trace ID, then
 Gemini Enterprise session ID. Calls with neither matching key stay unattributed.
@@ -76,6 +77,28 @@ CREATE TABLE IF NOT EXISTS notebooklm_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_nblm_ts   ON notebooklm_activity(ts);
 CREATE INDEX IF NOT EXISTS idx_nblm_user ON notebooklm_activity(user_principal);
+
+CREATE TABLE IF NOT EXISTS antigravity_requests (
+    insert_id       TEXT PRIMARY KEY,
+    ts              TEXT,
+    user_principal  TEXT,
+    client_name     TEXT,
+    client_version  TEXT,
+    model           TEXT,
+    model_provider  TEXT,
+    experience      TEXT,
+    input_tokens    INTEGER,
+    cached_tokens   INTEGER,
+    output_tokens   INTEGER,
+    thinking_tokens INTEGER,
+    total_tokens    INTEGER,
+    quota_type      TEXT,
+    request_id      TEXT,
+    trajectory_id   TEXT,
+    location        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agy_ts   ON antigravity_requests(ts);
+CREATE INDEX IF NOT EXISTS idx_agy_user ON antigravity_requests(user_principal);
 
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -214,6 +237,43 @@ SELECT
     MAX(ts)                           AS last_seen
 FROM notebooklm_activity
 GROUP BY user_principal;
+
+-- Antigravity's token counts come from its own log, never from the spans
+-- behind the views above, and are never added to them. Its total also
+-- counts thinking tokens, which it reports as a figure of their own.
+-- Cached tokens are the part of the input served from cache, not extra.
+DROP VIEW IF EXISTS antigravity_by_user;
+CREATE VIEW antigravity_by_user AS
+SELECT
+    COALESCE(user_principal, '(unattributed)') AS user_principal,
+    COUNT(*)                              AS requests,
+    COUNT(DISTINCT trajectory_id)         AS conversations,
+    COUNT(DISTINCT substr(ts, 1, 10))     AS active_days,
+    COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+    COALESCE(SUM(cached_tokens), 0)       AS cached_tokens,
+    COALESCE(SUM(output_tokens), 0)       AS output_tokens,
+    COALESCE(SUM(thinking_tokens), 0)     AS thinking_tokens,
+    COALESCE(SUM(total_tokens), 0)        AS total_tokens,
+    MIN(ts)                               AS first_seen,
+    MAX(ts)                               AS last_seen
+FROM antigravity_requests
+GROUP BY 1;
+
+-- One row per account per UTC day; sum across accounts for daily totals.
+DROP VIEW IF EXISTS antigravity_by_day;
+CREATE VIEW antigravity_by_day AS
+SELECT
+    substr(ts, 1, 10)                          AS day,
+    COALESCE(user_principal, '(unattributed)') AS user_principal,
+    COUNT(*)                                   AS requests,
+    COUNT(DISTINCT trajectory_id)              AS conversations,
+    COALESCE(SUM(input_tokens), 0)             AS input_tokens,
+    COALESCE(SUM(cached_tokens), 0)            AS cached_tokens,
+    COALESCE(SUM(output_tokens), 0)            AS output_tokens,
+    COALESCE(SUM(thinking_tokens), 0)          AS thinking_tokens,
+    COALESCE(SUM(total_tokens), 0)             AS total_tokens
+FROM antigravity_requests
+GROUP BY 1, 2;
 """
 
 
@@ -273,6 +333,10 @@ def upsert_tool_calls(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) 
 
 def upsert_notebooklm_activity(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
     return _upsert(conn, "notebooklm_activity", rows)
+
+
+def upsert_antigravity_requests(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> int:
+    return _upsert(conn, "antigravity_requests", rows)
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:

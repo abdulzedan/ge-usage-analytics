@@ -105,6 +105,7 @@ _TEMPLATE = r"""<!doctype html>
   .hero .note  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .card .kpis { margin-bottom: 14px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .tile .label { font-size: 12px; color: var(--text-secondary); }
   .tile .value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
@@ -279,6 +280,41 @@ _TEMPLATE = r"""<!doctype html>
     <div class="tablewrap" id="tableNblmRecent"></div>
   </div>
 
+  <div class="card hidden" id="cardAgy">
+    <header><h2>Antigravity</h2></header>
+    <p class="desc">Requests and tokens from Antigravity's own log for the full collected period.
+    Filters above do not apply, and these tokens are separate from the totals above. Cached tokens
+    are part of input; thinking tokens are part of the total.</p>
+    <section class="kpis" id="agyKpis"></section>
+    <div class="tablewrap" id="tableAgy"></div>
+  </div>
+
+  <div class="card hidden" id="cardAgyDaily">
+    <header>
+      <h2>Antigravity tokens per day</h2>
+      <button class="ghost toggle" type="button" data-view="agyDaily">Table</button>
+    </header>
+    <p class="desc">Daily Antigravity tokens for the full collected period. Hover a column for details.</p>
+    <div class="legend" id="legendAgyDaily"></div>
+    <div class="plot" id="plotAgyDaily"></div>
+    <div class="tablewrap hidden" id="tableAgyDaily"></div>
+  </div>
+
+  <div class="grid2 hidden" id="gridAgy">
+    <div class="card">
+      <header><h2>Antigravity by model</h2></header>
+      <p class="desc">Antigravity also uses a lightweight model in the background, so expect Flash
+      Lite here even if nobody chose it.</p>
+      <div class="tablewrap" id="tableAgyModels"></div>
+    </div>
+
+    <div class="card">
+      <header><h2>Antigravity clients</h2></header>
+      <p class="desc">Client names and versions in use.</p>
+      <div class="tablewrap" id="tableAgyClients"></div>
+    </div>
+  </div>
+
   <footer class="note">
     <p>Sources: Cloud Logging <code>gemini_enterprise_user_activity</code> (user and prompt)
     and Cloud Trace <code>gen_ai.usage.*</code> (tokens), matched by trace or session ID.
@@ -409,8 +445,8 @@ function groupSum(rows, keyFn) {
 /* ---------------- charts ---------------- */
 
 /* Stacked columns over time. Two series -> legend + categorical slots 1 and 2. */
-function drawDaily(rows) {
-  const host = $("plotDaily");
+function drawDaily(rows, hostId = "plotDaily", names = ["Input", "Output"]) {
+  const host = $(hostId);
   host.innerHTML = "";
   const byDay = new Map();
   for (const r of rows) {
@@ -455,7 +491,7 @@ function drawDaily(rows) {
     const yTop = padT + plotH - hTotal;
 
     const html = `<div class="tt-title">${esc(d.key)}</div>`
-      + ttRow(c2, "Output", num(d.output)) + ttRow(c1, "Input", num(d.input))
+      + ttRow(c2, names[1], num(d.output)) + ttRow(c1, names[0], num(d.input))
       + ttRow(null, "Total", num(total));
 
     if (d.output > 0) {                                     // outermost -> rounded cap
@@ -492,6 +528,16 @@ function drawDaily(rows) {
     svg.appendChild(lab);
   }
   host.appendChild(svg);
+}
+
+/* Antigravity's daily totals ignore the filter row, but the chart is redrawn
+   with the others on resize and theme change. */
+function drawAgyDaily() {
+  if (!DATA.antigravityDaily.length) return;
+  legend("legendAgyDaily", [{ color: css("--series-1"), label: "Input tokens" },
+                            { color: css("--series-2"), label: "Output and thinking tokens" }]);
+  drawDaily(DATA.antigravityDaily.map((d) => ({ t: d.d, i: d.i, o: d.o + d.th })),
+            "plotAgyDaily", ["Input", "Output + thinking"]);
 }
 
 /* Horizontal stacked bars. Two series -> legend + slots 1 and 2. */
@@ -736,6 +782,8 @@ function render() {
     { label: "Prompt", html: true,
       get: (r) => `<span class="q" title="${esc(DATA.queries[r.trace] || "")}">${esc(DATA.queries[r.trace] || "—")}</span>` },
   ], recent);
+
+  drawAgyDaily();
 }
 
 /* ---------------- wiring ---------------- */
@@ -775,6 +823,65 @@ if (DATA.notebooklmRecent.length) {
     { label: "Prompt", html: true,
       get: (r) => `<span class="q" title="${esc(r.q || "")}">${esc(r.q || "—")}</span>` },
   ], DATA.notebooklmRecent);
+}
+
+/* Antigravity has its own log and its own token counts, with no trace ids to
+   join on, so it too is rendered once and kept out of the filter row. */
+if (DATA.antigravity.length) {
+  const t = DATA.antigravityTotals;
+  $("cardAgy").classList.remove("hidden");
+  $("agyKpis").innerHTML = [
+    ["Named users", num(t.users)],
+    ["Requests", num(t.requests)],
+    ["Conversations", num(t.conversations)],
+    ["Total tokens", num(t.tokens)],
+    ["Input tokens", num(t.input),
+     t.cached && t.input ? `${num(t.cached)} cached (${Math.round(t.cached / t.input * 100)}%)` : ""],
+    ["Output tokens", num(t.output)],
+    ["Thinking tokens", num(t.thinking)],
+  ].map(([l, v, sub]) => `<div class="tile"><div class="label">${esc(l)}</div>`
+    + `<div class="value">${esc(v)}</div>`
+    + (sub ? `<div class="sub">${esc(sub)}</div>` : "") + `</div>`).join("");
+  renderTable("tableAgy", [
+    { label: "User", get: (r) => r.u },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Conversations", num: true, get: (r) => num(r.c) },
+    { label: "Input", num: true, get: (r) => num(r.i) },
+    { label: "Cached", num: true, get: (r) => num(r.ca) },
+    { label: "Output", num: true, get: (r) => num(r.o) },
+    { label: "Thinking", num: true, get: (r) => num(r.th) },
+    { label: "Total", num: true, get: (r) => num(r.k) },
+    { label: "Active days", num: true, get: (r) => num(r.d) },
+    { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
+  ], DATA.antigravity);
+
+  $("cardAgyDaily").classList.remove("hidden");
+  renderTable("tableAgyDaily", [
+    { label: "Day", get: (r) => r.d },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Input", num: true, get: (r) => num(r.i) },
+    { label: "Cached", num: true, get: (r) => num(r.ca) },
+    { label: "Output", num: true, get: (r) => num(r.o) },
+    { label: "Thinking", num: true, get: (r) => num(r.th) },
+    { label: "Total", num: true, get: (r) => num(r.k) },
+  ], DATA.antigravityDaily);
+
+  $("gridAgy").classList.remove("hidden");
+  renderTable("tableAgyModels", [
+    { label: "Model", get: (r) => r.m || "(unknown)" },
+    { label: "Provider", get: (r) => r.p || "—" },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Tokens", num: true, get: (r) => num(r.k) },
+  ], DATA.antigravityModels);
+  renderTable("tableAgyClients", [
+    { label: "Client", get: (r) => r.c || "(unknown)" },
+    { label: "Version", get: (r) => r.v || "—" },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
+  ], DATA.antigravityClients);
 }
 
 document.querySelectorAll(".toggle").forEach((btn) => {
@@ -891,11 +998,82 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
         for r in conn.execute("SELECT * FROM notebooklm_activity ORDER BY ts DESC LIMIT 200")
     ]
 
+    antigravity = [
+        {
+            "u": r["user_principal"],
+            "n": r["requests"],
+            "c": r["conversations"],
+            "i": r["input_tokens"],
+            "ca": r["cached_tokens"],
+            "o": r["output_tokens"],
+            "th": r["thinking_tokens"],
+            "k": r["total_tokens"],
+            "d": r["active_days"],
+            "l": r["last_seen"],
+        }
+        for r in conn.execute("SELECT * FROM antigravity_by_user ORDER BY total_tokens DESC")
+    ]
+
+    totals = conn.execute(
+        "SELECT COUNT(*) n, COUNT(DISTINCT user_principal) u,"
+        " COUNT(DISTINCT trajectory_id) c,"
+        " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(cached_tokens), 0) ca,"
+        " COALESCE(SUM(output_tokens), 0) o,"
+        " COALESCE(SUM(thinking_tokens), 0) th, COALESCE(SUM(total_tokens), 0) k"
+        " FROM antigravity_requests"
+    ).fetchone()
+
+    antigravity_daily = [
+        {"d": r["d"], "n": r["n"], "u": r["u"], "i": r["i"], "ca": r["ca"],
+         "o": r["o"], "th": r["th"], "k": r["k"]}
+        for r in conn.execute(
+            "SELECT substr(ts, 1, 10) d, COUNT(*) n, COUNT(DISTINCT user_principal) u,"
+            " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(cached_tokens), 0) ca,"
+            " COALESCE(SUM(output_tokens), 0) o, COALESCE(SUM(thinking_tokens), 0) th,"
+            " COALESCE(SUM(total_tokens), 0) k"
+            " FROM antigravity_requests WHERE ts IS NOT NULL GROUP BY 1 ORDER BY 1"
+        )
+    ]
+
+    # Older clients send no provider label, so a model's rows can disagree;
+    # MAX keeps whichever provider was reported.
+    antigravity_models = [
+        {"m": r["model"], "p": r["p"], "n": r["n"], "u": r["u"], "k": r["k"]}
+        for r in conn.execute(
+            "SELECT model, MAX(model_provider) p, COUNT(*) n,"
+            " COUNT(DISTINCT user_principal) u, COALESCE(SUM(total_tokens), 0) k"
+            " FROM antigravity_requests GROUP BY model ORDER BY k DESC"
+        )
+    ]
+
+    antigravity_clients = [
+        {"c": r["client_name"], "v": r["client_version"], "n": r["n"], "u": r["u"], "l": r["l"]}
+        for r in conn.execute(
+            "SELECT client_name, client_version, COUNT(*) n,"
+            " COUNT(DISTINCT user_principal) u, MAX(ts) l"
+            " FROM antigravity_requests GROUP BY 1, 2 ORDER BY n DESC"
+        )
+    ]
+
     return {
         "rows": rows,
         "queries": queries,
         "notebooklm": notebooklm,
         "notebooklmRecent": notebooklm_recent,
+        "antigravity": antigravity,
+        "antigravityTotals": {
+            "requests": totals["n"],
+            "users": totals["u"],
+            "conversations": totals["c"],
+            "input": totals["i"],
+            "cached": totals["ca"],
+            "output": totals["o"],
+            "thinking": totals["th"],
+            "tokens": totals["k"],
+        },
+        "antigravityDaily": antigravity_daily,
+        "antigravityModels": antigravity_models,
+        "antigravityClients": antigravity_clients,
     }
 
 
@@ -915,11 +1093,13 @@ def render_dashboard(
     min_time = min((r["t"] for r in rows), default="")
     turn_count = conn.execute("SELECT COUNT(*) AS c FROM turns").fetchone()["c"]
     nblm_count = conn.execute("SELECT COUNT(*) AS c FROM notebooklm_activity").fetchone()["c"]
+    agy_count = payload["antigravityTotals"]["requests"]
 
     span = f"{min_time.replace('T', ' ')} → {max_time.replace('T', ' ')} UTC" if rows else "no data yet"
     subtitle = (
         f"Project {project} · {len(rows):,} model calls · {turn_count:,} logged turns"
         f"{f' · {nblm_count:,} NotebookLM activities' if nblm_count else ''}"
+        f"{f' · {agy_count:,} Antigravity requests' if agy_count else ''}"
         f" · {span}"
         f"{' · generated ' + generated_at if generated_at else ''}"
         " · Cloud Logging + Cloud Trace"

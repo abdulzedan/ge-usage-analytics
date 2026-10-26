@@ -89,7 +89,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     client = GcpClient(project)
     conn = store.connect(args.db)
 
-    print("\n[1/3] Cloud Logging: chat turns and user identity …", flush=True)
+    print("\n[1/4] Cloud Logging: chat turns and user identity …", flush=True)
     turns = collector.collect_turns(
         client, start=start, end=end, engine_id=args.engine_id
     )
@@ -97,7 +97,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     users = {t["user_principal"] for t in turns if t.get("user_principal")}
     print(f"      {n_turns:,} turns · {len(users)} distinct users")
 
-    print("\n[2/3] Cloud Trace: model spans and token counts …", flush=True)
+    print("\n[2/4] Cloud Trace: model spans and token counts …", flush=True)
     models, tools = collector.collect_spans(
         client, start=start, end=end, trace_filters=args.trace_filter
     )
@@ -107,7 +107,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     print(f"      {n_models:,} model calls · {n_tools:,} tool calls")
     print(f"      {tok_in:,} input tokens · {tok_out:,} output tokens")
 
-    print("\n[3/3] Cloud Logging: NotebookLM Enterprise activity …", flush=True)
+    print("\n[3/4] Cloud Logging: NotebookLM Enterprise activity …", flush=True)
     nblm = collector.collect_notebooklm_activity(client, start=start, end=end)
     n_nblm = store.upsert_notebooklm_activity(conn, nblm)
     nblm_users = {r["user_principal"] for r in nblm if r.get("user_principal")}
@@ -117,6 +117,31 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(
             "      0 activities. NotebookLM Enterprise logging is off by default and has\n"
             "      to be enabled per project; see 'NotebookLM Enterprise' in the README."
+        )
+
+    print("\n[4/4] Cloud Logging: Antigravity requests …", flush=True)
+    agy = collector.collect_antigravity_requests(client, start=start, end=end)
+    n_agy = store.upsert_antigravity_requests(conn, agy)
+    agy_users = {r["user_principal"] for r in agy if r.get("user_principal")}
+    agy_convs = {r["trajectory_id"] for r in agy if r.get("trajectory_id")}
+    if n_agy:
+        agy_in, agy_cached, agy_out, agy_think = (
+            sum(r.get(k) or 0 for r in agy)
+            for k in ("input_tokens", "cached_tokens", "output_tokens", "thinking_tokens")
+        )
+        print(
+            f"      {n_agy:,} requests · {len(agy_users)} distinct users · "
+            f"{len(agy_convs):,} conversations"
+        )
+        print(
+            f"      {agy_in:,} input ({agy_cached:,} cached) · {agy_out:,} output · "
+            f"{agy_think:,} thinking tokens (reported separately)"
+        )
+    else:
+        print(
+            "      0 requests. Antigravity logging is off by default; enable\n"
+            "      Metadata logging in the Gemini Enterprise AI developer tools\n"
+            "      settings. See 'Antigravity' in the README."
         )
 
     store.set_meta(conn, "last_collect_utc", end.strftime("%Y-%m-%dT%H:%M:%SZ"))
@@ -161,32 +186,36 @@ def cmd_stats(args: argparse.Namespace) -> int:
     rows = conn.execute(
         "SELECT * FROM usage_by_user ORDER BY total_tokens DESC"
     ).fetchall()
-    if not rows:
-        print("No data yet. Run `collect` first.")
-        return 1
-
-    head = f"{'USER':<38}{'TURNS':>8}{'CALLS':>8}{'INPUT':>12}{'OUTPUT':>10}{'TOTAL':>12}"
-    print(head)
-    print("-" * len(head))
-    for r in rows:
-        user = (r["user_principal"] or "")[:37]
-        print(
-            f"{user:<38}{r['turns']:>8,}{r['model_calls']:>8,}"
-            f"{r['input_tokens']:>12,}{r['output_tokens']:>10,}{r['total_tokens']:>12,}"
-        )
-    print("-" * len(head))
-    tot = conn.execute(
-        "SELECT COUNT(DISTINCT user_principal) u, COUNT(DISTINCT trace_id) t,"
-        " COUNT(*) c, SUM(input_tokens) i, SUM(output_tokens) o FROM usage"
-    ).fetchone()
-    print(
-        f"{'TOTAL (' + str(tot['u']) + ' users)':<38}{tot['t']:>8,}{tot['c']:>8,}"
-        f"{tot['i']:>12,}{tot['o']:>10,}{tot['i'] + tot['o']:>12,}"
-    )
-
     nblm = conn.execute(
         "SELECT * FROM notebooklm_by_user ORDER BY activities DESC"
     ).fetchall()
+    agy = conn.execute(
+        "SELECT * FROM antigravity_by_user ORDER BY total_tokens DESC"
+    ).fetchall()
+    if not (rows or nblm or agy):
+        print("No data yet. Run `collect` first.")
+        return 1
+
+    if rows:
+        head = f"{'USER':<38}{'TURNS':>8}{'CALLS':>8}{'INPUT':>12}{'OUTPUT':>10}{'TOTAL':>12}"
+        print(head)
+        print("-" * len(head))
+        for r in rows:
+            user = (r["user_principal"] or "")[:37]
+            print(
+                f"{user:<38}{r['turns']:>8,}{r['model_calls']:>8,}"
+                f"{r['input_tokens']:>12,}{r['output_tokens']:>10,}{r['total_tokens']:>12,}"
+            )
+        print("-" * len(head))
+        tot = conn.execute(
+            "SELECT COUNT(DISTINCT user_principal) u, COUNT(DISTINCT trace_id) t,"
+            " COUNT(*) c, SUM(input_tokens) i, SUM(output_tokens) o FROM usage"
+        ).fetchone()
+        print(
+            f"{'TOTAL (' + str(tot['u']) + ' users)':<38}{tot['t']:>8,}{tot['c']:>8,}"
+            f"{tot['i']:>12,}{tot['o']:>10,}{tot['i'] + tot['o']:>12,}"
+        )
+
     if nblm:
         head = f"{'NOTEBOOKLM USER':<38}{'ACTIONS':>8}{'NOTEBOOKS':>10}{'DAYS':>6}  LAST SEEN"
         print("\nNotebookLM Enterprise — activity only; its log carries no token counts")
@@ -197,6 +226,22 @@ def cmd_stats(args: argparse.Namespace) -> int:
             print(
                 f"{user:<38}{r['activities']:>8,}{r['notebooks']:>10,}"
                 f"{r['active_days']:>6,}  {r['last_seen'] or ''}"
+            )
+
+    if agy:
+        head = (
+            f"{'ANTIGRAVITY USER':<38}{'REQUESTS':>9}{'CONVS':>7}"
+            f"{'INPUT':>12}{'CACHED':>12}{'OUTPUT':>10}{'THINKING':>10}{'TOTAL':>12}"
+        )
+        print("\nAntigravity — separate log and token counts, not added to Gemini Enterprise totals")
+        print(head)
+        print("-" * len(head))
+        for r in agy:
+            user = (r["user_principal"] or "")[:37]
+            print(
+                f"{user:<38}{r['requests']:>9,}{r['conversations']:>7,}"
+                f"{r['input_tokens']:>12,}{r['cached_tokens']:>12,}{r['output_tokens']:>10,}"
+                f"{r['thinking_tokens']:>10,}{r['total_tokens']:>12,}"
             )
     conn.close()
     return 0

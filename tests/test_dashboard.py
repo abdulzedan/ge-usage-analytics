@@ -189,6 +189,73 @@ def test_without_notebooklm_data_the_payload_and_subtitle_stay_quiet(conn):
     assert "NotebookLM activities" not in html
 
 
+def test_antigravity_rollups_are_embedded_and_counted(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [
+            {"insert_id": "a1", "ts": "2026-07-01T09:00:00",
+             "user_principal": "sam@example.com", "client_name": "antigravity_cli",
+             "client_version": "1.2.14", "model": "gemini-3.5-flash-lite",
+             "model_provider": None,
+             "input_tokens": 91, "cached_tokens": None, "output_tokens": 3,
+             "thinking_tokens": None, "total_tokens": 94, "trajectory_id": None},
+            {"insert_id": "a2", "ts": "2026-07-01T09:00:40",
+             "user_principal": "sam@example.com", "client_name": "antigravity_cli",
+             "client_version": "1.2.14", "model": "gemini-3.1-pro-preview",
+             "model_provider": None,
+             "input_tokens": 12534, "cached_tokens": 7388, "output_tokens": 19,
+             "thinking_tokens": 274, "total_tokens": 12827, "trajectory_id": "traj-1"},
+            # After an upgrade, the same model arrives with a provider label.
+            {"insert_id": "a3", "ts": "2026-07-01T09:01:10",
+             "user_principal": "sam@example.com", "client_name": "antigravity_cli",
+             "client_version": "1.4.5", "model": "gemini-3.1-pro-preview",
+             "model_provider": "Google",
+             "input_tokens": 1000, "cached_tokens": 600, "output_tokens": 10,
+             "thinking_tokens": 90, "total_tokens": 1100, "trajectory_id": "traj-1"},
+        ],
+    )
+    html = render_dashboard(conn, project="example-project")
+    payload = _payload(html)
+
+    (user,) = payload["antigravity"]
+    assert (user["u"], user["n"], user["c"]) == ("sam@example.com", 3, 1)
+    assert (user["i"], user["ca"], user["o"], user["th"], user["k"]) == (
+        13625, 7988, 32, 364, 14021,
+    )
+    assert payload["antigravityTotals"] == {
+        "requests": 3, "users": 1, "conversations": 1,
+        "input": 13625, "cached": 7988, "output": 32, "thinking": 364, "tokens": 14021,
+    }
+    assert payload["antigravityDaily"] == [
+        {"d": "2026-07-01", "n": 3, "u": 1, "i": 13625, "ca": 7988,
+         "o": 32, "th": 364, "k": 14021},
+    ]
+    # One row per model, whichever client versions reported it.
+    assert [(m["m"], m["p"]) for m in payload["antigravityModels"]] == [
+        ("gemini-3.1-pro-preview", "Google"), ("gemini-3.5-flash-lite", None),
+    ]
+    assert [(c["c"], c["v"], c["n"]) for c in payload["antigravityClients"]] == [
+        ("antigravity_cli", "1.2.14", 2), ("antigravity_cli", "1.4.5", 1),
+    ]
+    assert "3 Antigravity requests" in html
+
+    # The Gemini Enterprise rows, and therefore every filtered chart, are untouched.
+    assert len(payload["rows"]) == 1
+    assert sum(r["i"] + r["o"] for r in payload["rows"]) == 1540
+
+
+def test_without_antigravity_data_the_payload_and_subtitle_stay_quiet(conn):
+    html = render_dashboard(conn, project="example-project")
+    payload = _payload(html)
+
+    assert payload["antigravity"] == []
+    assert payload["antigravityDaily"] == []
+    assert payload["antigravityModels"] == []
+    assert payload["antigravityClients"] == []
+    assert payload["antigravityTotals"]["requests"] == 0
+    assert "Antigravity requests" not in html
+
+
 def test_prompt_text_is_normalised_to_a_single_line(conn):
     queries = _payload(render_dashboard(conn, project="example-project"))["queries"]
     assert queries["trace-a"] == "What is the status of order 4471? Any update?"

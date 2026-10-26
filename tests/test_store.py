@@ -22,12 +22,14 @@ def _names(conn, kind):
 
 
 def test_connect_creates_tables_and_views(conn):
-    assert {"turns", "model_calls", "tool_calls", "notebooklm_activity", "meta"} <= _names(
-        conn, "table"
-    )
-    assert {"usage", "usage_by_user", "usage_by_agent", "notebooklm_by_user"} <= _names(
-        conn, "view"
-    )
+    assert {
+        "turns", "model_calls", "tool_calls", "notebooklm_activity", "antigravity_requests",
+        "meta",
+    } <= _names(conn, "table")
+    assert {
+        "usage", "usage_by_user", "usage_by_agent", "notebooklm_by_user", "antigravity_by_user",
+        "antigravity_by_day",
+    } <= _names(conn, "view")
 
 
 def test_connect_is_repeatable(tmp_path):
@@ -358,6 +360,106 @@ def test_notebooklm_activity_round_trip_and_rollup(conn):
     assert summary["active_days"] == 2
     assert summary["first_seen"] == "2026-07-01T09:00:00"
     assert summary["last_seen"] == "2026-07-02T10:00:00"
+
+
+def _agy(insert_id, ts, user, model, tokens, trajectory, cached=None):
+    """One antigravity_requests row; `tokens` is (input, output, thinking)."""
+    i, o, th = tokens
+    return {"insert_id": insert_id, "ts": ts, "user_principal": user, "model": model,
+            "input_tokens": i, "cached_tokens": cached, "output_tokens": o,
+            "thinking_tokens": th, "total_tokens": i + o + (th or 0),
+            "trajectory_id": trajectory}
+
+
+def test_antigravity_requests_round_trip_and_rollup(conn):
+    rows = [
+        # a background task: no thinking, no conversation
+        _agy("a1", "2026-07-01T09:00:00", "dana@example.com", "gemini-3.5-flash-lite",
+             (91, 3, None), None),
+        _agy("a2", "2026-07-01T09:00:30", "dana@example.com", "gemini-3.1-pro-preview",
+             (12534, 19, 274), "traj-1", cached=7388),
+        _agy("a3", "2026-07-03T14:00:00", "dana@example.com", "gemini-3.1-pro-preview",
+             (9000, 100, 300), "traj-2", cached=3600),
+        _agy("a4", "2026-07-03T15:00:00", None, "gemini-3.1-pro-preview",
+             (400, 50, 50), "traj-3"),
+    ]
+    assert store.upsert_antigravity_requests(conn, rows) == 4
+    assert store.upsert_antigravity_requests(conn, rows) == 4  # idempotent on insert_id
+    assert conn.execute("SELECT COUNT(*) c FROM antigravity_requests").fetchone()["c"] == 4
+
+    by_user = {r["user_principal"]: r for r in conn.execute("SELECT * FROM antigravity_by_user")}
+
+    dana = by_user["dana@example.com"]
+    assert dana["requests"] == 3
+    assert dana["conversations"] == 2  # the background task belongs to none
+    assert dana["active_days"] == 2
+    assert dana["input_tokens"] == 21625
+    assert dana["cached_tokens"] == 10988  # part of the input, so not in the total twice
+    assert dana["output_tokens"] == 122
+    assert dana["thinking_tokens"] == 574
+    assert dana["total_tokens"] == 22321
+    assert dana["first_seen"] == "2026-07-01T09:00:00"
+    assert dana["last_seen"] == "2026-07-03T14:00:00"
+
+    # Tokens without a user stay visible rather than vanishing from the totals.
+    assert by_user["(unattributed)"]["total_tokens"] == 500
+
+
+def test_antigravity_rollup_reports_zero_rather_than_null_thinking(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [_agy("a1", "2026-07-01T09:00:00", "dana@example.com", "gemini-3.5-flash-lite",
+              (91, 3, None), None)],
+    )
+    row = conn.execute("SELECT * FROM antigravity_by_user").fetchone()
+    assert row["thinking_tokens"] == 0
+    assert row["cached_tokens"] == 0
+    assert row["conversations"] == 0
+
+
+def test_antigravity_by_day_splits_each_account_by_utc_day(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [
+            _agy("a1", "2026-07-01T09:00:00", "dana@example.com", "gemini-3.5-flash-lite",
+                 (91, 3, None), None),
+            _agy("a2", "2026-07-01T23:59:59", "dana@example.com", "gemini-3.1-pro-preview",
+                 (12534, 19, 274), "traj-1", cached=7388),
+            _agy("a3", "2026-07-02T00:00:01", "dana@example.com", "gemini-3.1-pro-preview",
+                 (9000, 100, 300), "traj-1", cached=3600),
+            _agy("a4", "2026-07-02T10:00:00", None, "gemini-3.1-pro-preview",
+                 (400, 50, 50), "traj-2"),
+        ],
+    )
+    rows = {
+        (r["day"], r["user_principal"]): r
+        for r in conn.execute("SELECT * FROM antigravity_by_day")
+    }
+    assert sorted(rows) == [
+        ("2026-07-01", "dana@example.com"),
+        ("2026-07-02", "(unattributed)"),
+        ("2026-07-02", "dana@example.com"),
+    ]
+
+    first = rows[("2026-07-01", "dana@example.com")]
+    assert (first["requests"], first["conversations"]) == (2, 1)
+    assert (first["input_tokens"], first["cached_tokens"]) == (12625, 7388)
+    assert (first["output_tokens"], first["thinking_tokens"], first["total_tokens"]) == (
+        22, 274, 12921,
+    )
+    # A conversation that crosses midnight counts on both days.
+    assert rows[("2026-07-02", "dana@example.com")]["conversations"] == 1
+    assert rows[("2026-07-02", "(unattributed)")]["total_tokens"] == 500
+
+
+def test_antigravity_tokens_never_reach_the_usage_views(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [{"insert_id": "a1", "ts": "2026-07-01T09:00:00",
+          "user_principal": "dana@example.com", "total_tokens": 12000}],
+    )
+    assert conn.execute("SELECT COUNT(*) c FROM usage").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM usage_by_user").fetchone()["c"] == 0
 
 
 def test_usage_view_falls_back_to_the_raw_platform_label(conn):

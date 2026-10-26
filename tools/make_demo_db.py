@@ -101,6 +101,33 @@ NOTEBOOK_PROMPTS = [
     "Which sources mention the 2025 pricing review?",
 ]
 
+# Antigravity developers overlap with the chat users only partly; one codes
+# and never chats.
+AGY_USERS = [
+    ("marcus.lin@example.com", 40),
+    ("priya.raman@example.com", 30),
+    ("sam.oduya@example.com", 20),
+    ("dana.whitfield@example.com", 10),
+]
+
+AGY_MODELS = [
+    # (model, experience, share): the experience adds the thinking level
+    ("gemini-3.8-flash", "gemini-3.8-flash-medium", 45),
+    ("gemini-3.8-flash", "gemini-3.8-flash-high", 25),
+    ("gemini-3.1-pro-preview", "gemini-3.1-pro-high", 30),
+]
+
+# Antigravity calls a lightweight model in the background (context
+# management, summaries) whatever model is chosen.
+AGY_BACKGROUND_MODEL = ("gemini-3.5-flash-lite", "gemini-3.5-flash-lite")
+
+AGY_CLIENTS = [
+    # (client, version, provider label, share): an upgrade half rolled out,
+    # and only the newer client labels the model provider
+    ("antigravity_cli", "1.4.5", "Google", 65),
+    ("antigravity_cli", "1.2.14", None, 35),
+]
+
 
 # Relative likelihood that a turn lands in each UTC hour.
 HOUR_WEIGHT = {
@@ -320,11 +347,64 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
             }
         )
 
+    # Antigravity: its own metadata log, one entry per inference request, with
+    # token counts of its own and no link to the chat turns above. Drawn
+    # last, so the populations above stay identical for a given seed.
+    agy_rows: list[dict] = []
+    for n in range(max(8, turns // 12)):
+        user = _weighted(rng, AGY_USERS)[0]
+        model, experience, _ = _weighted(rng, AGY_MODELS)
+        client, version, provider, _ = _weighted(rng, AGY_CLIENTS)
+        moment = _turn_time(rng, end, days)
+        trajectory = f"{seed:04x}-agy-{n:05d}"
+
+        for k in range(rng.randint(3, 15)):
+            if moment > end:
+                break
+            # The first request is a background task: Flash Lite, no thinking,
+            # and outside the conversation, so it carries no trajectory id.
+            background = k == 0
+            if background:
+                input_tokens = int(rng.uniform(60, 600))
+                cached_tokens = None
+                output_tokens = int(rng.uniform(2, 40))
+                thinking_tokens = None
+            else:
+                # An agent's context grows as the conversation goes on, and
+                # from its second request on, much of it is served from cache.
+                input_tokens = int(rng.uniform(6000, 14000) + k * rng.uniform(1500, 4500))
+                cached_tokens = int(input_tokens * rng.uniform(0.45, 0.85)) if k > 1 else None
+                output_tokens = int(rng.uniform(15, 900))
+                thinking_tokens = int(rng.uniform(150, 1200))
+            agy_rows.append(
+                {
+                    "insert_id": f"agy-{n}-{k}",
+                    "ts": moment.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "user_principal": user,
+                    "client_name": client,
+                    "client_version": version,
+                    "model": AGY_BACKGROUND_MODEL[0] if background else model,
+                    "model_provider": provider,
+                    "experience": AGY_BACKGROUND_MODEL[1] if background else experience,
+                    "input_tokens": input_tokens,
+                    "cached_tokens": cached_tokens,
+                    "output_tokens": output_tokens,
+                    "thinking_tokens": thinking_tokens,
+                    "total_tokens": input_tokens + output_tokens + (thinking_tokens or 0),
+                    "quota_type": None,
+                    "request_id": f"{trajectory}-{k:02d}",
+                    "trajectory_id": None if background else trajectory,
+                    "location": "global",
+                }
+            )
+            moment += dt.timedelta(seconds=rng.uniform(8, 90))
+
     conn = store.connect(out)
     store.upsert_turns(conn, turn_rows)
     store.upsert_model_calls(conn, model_rows)
     store.upsert_tool_calls(conn, tool_rows)
     store.upsert_notebooklm_activity(conn, nblm_rows)
+    store.upsert_antigravity_requests(conn, agy_rows)
     store.set_meta(conn, "project", "example-project")
     store.set_meta(conn, "last_collect_utc", end.strftime("%Y-%m-%dT%H:%M:%SZ"))
     conn.close()
@@ -334,6 +414,7 @@ def build(out: str, *, days: int, turns: int, seed: int) -> dict[str, int]:
         "model_calls": len(model_rows),
         "tool_calls": len(tool_rows),
         "notebooklm": len(nblm_rows),
+        "antigravity": len(agy_rows),
     }
 
 
@@ -349,7 +430,8 @@ def main() -> int:
     print(
         f"wrote {args.out}: {counts['turns']:,} turns · "
         f"{counts['model_calls']:,} model calls · {counts['tool_calls']:,} tool calls · "
-        f"{counts['notebooklm']:,} notebooklm activities"
+        f"{counts['notebooklm']:,} notebooklm activities · "
+        f"{counts['antigravity']:,} antigravity requests"
     )
     return 0
 

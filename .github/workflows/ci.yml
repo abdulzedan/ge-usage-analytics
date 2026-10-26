@@ -81,6 +81,8 @@ jobs:
              FROM usage GROUP BY 1 ORDER BY tokens DESC"
           python ge_usage.py --db demo.db query \
             "SELECT * FROM usage_by_user" --format csv | head -3
+          python ge_usage.py --db demo.db query \
+            "SELECT * FROM antigravity_by_user"
 
       - name: Render the dashboard
         run: python ge_usage.py --db demo.db dashboard --out dashboard.html --project ci

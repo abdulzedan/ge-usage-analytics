@@ -5,6 +5,31 @@ This project is a demonstration for local log collection, not a production tool.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] 2026-10-26
+
+Adds Antigravity collection from the Business AI Code metadata log.
+
+### Added
+
+- Antigravity collection from `InferenceResponseLog` entries, written once
+  Metadata logging is enabled in the Gemini Enterprise AI developer tools
+  settings (off by default). Each entry gives the account, model, client and
+  version, conversation, and input, cached, output, and thinking token counts.
+  Rows are stored in `antigravity_requests` and summarised per user in
+  `antigravity_by_user`, per user and day in `antigravity_by_day`, in `stats`,
+  and in dashboard cards for users, daily tokens, models, and client versions.
+  The filter skips prompt entries, and model output on the metadata entries is
+  discarded. These token counts are reported separately from Gemini Enterprise
+  totals. Google does not document the entry format; the fields were checked
+  against live entries from Antigravity CLI 1.2.8 to 1.4.5.
+- Synthetic Antigravity requests in the demo generator, including background
+  Flash Lite calls, cached input, and a client upgrade in progress.
+
+### Changed
+
+- `stats` prints every source that has data. It previously stopped at "No data
+  yet" without Gemini Enterprise model calls, hiding NotebookLM-only data.
+
 ## [1.1.0] 2026-08-20
 
 Adds session-based attribution and NotebookLM activity collection after a
@@ -70,5 +95,6 @@ Calls without matching user identifiers remain unattributed but contribute to
 collected token totals. Source retention limits the available history. See the
 README for details.
 
+[1.2.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.2.0
 [1.1.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.1.0
 [1.0.0]: https://github.com/abdulzedan/ge-usage-analytics/releases/tag/v1.0.0
