@@ -30,13 +30,11 @@ NOTEBOOKLM_ACTIVITY_LOG = (
     "discoveryengine.googleapis.com%2Fnotebooklm_enterprise_user_activity"
 )
 
-# Antigravity, used through a Gemini Enterprise license, is served by the
-# Business AI Code API and writes nothing until an admin turns on Metadata
-# logging in the Gemini Enterprise AI developer tools settings. From then on
-# every inference request leaves one InferenceResponseLog entry naming the
-# user, the model and its token counts. The separate prompts-and-responses
-# setting adds InferenceRequestLog entries carrying the prompt; the filter
-# selects by payload type so those are never read.
+# Antigravity on a Gemini Enterprise license is served by the Business AI Code
+# API. Metadata logging, off by default, writes one InferenceResponseLog entry
+# per request with the user, model, and token counts. Prompts-and-responses
+# logging adds InferenceRequestLog entries with the prompt; the payload-type
+# filter excludes them.
 ANTIGRAVITY_RESOURCE_TYPE = "businessaicode.googleapis.com/BAICInstance"
 ANTIGRAVITY_RESPONSE_LOG_TYPE = (
     "type.googleapis.com/google.cloud.businessaicode.logging.v1.InferenceResponseLog"
@@ -310,8 +308,8 @@ def parse_antigravity_request(entry: dict[str, Any]) -> dict[str, Any] | None:
         "thinking_tokens": _count(metadata, "thoughtsTokenCount"),
         "total_tokens": _count(metadata, "totalTokenCount"),
         "quota_type": metadata.get("quotaType"),
-        # Background tasks run on Flash Lite outside any conversation, and
-        # their entries carry no trajectory id.
+        # Background requests (Flash Lite, as observed) belong to no
+        # conversation and carry no trajectory id.
         "request_id": labels.get("request_id"),
         "trajectory_id": labels.get("trajectory_id") or None,
         "location": ((entry.get("resource") or {}).get("labels") or {}).get("location"),

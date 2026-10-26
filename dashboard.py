@@ -282,9 +282,9 @@ _TEMPLATE = r"""<!doctype html>
 
   <div class="card hidden" id="cardAgy">
     <header><h2>Antigravity</h2></header>
-    <p class="desc">From Antigravity's metadata log, over the whole collected window. Its token counts
-    are the log's own, with thinking tokens counted separately and included in the total; none of
-    them is part of the token figures above, and the filter row does not apply.</p>
+    <p class="desc">Requests and tokens from Antigravity's own log for the full collected period.
+    Filters above do not apply, and these tokens are separate from the totals above. Cached tokens
+    are part of input; thinking tokens are part of the total.</p>
     <section class="kpis" id="agyKpis"></section>
     <div class="tablewrap" id="tableAgy"></div>
   </div>
@@ -292,14 +292,14 @@ _TEMPLATE = r"""<!doctype html>
   <div class="grid2 hidden" id="gridAgy">
     <div class="card">
       <header><h2>Antigravity by model</h2></header>
-      <p class="desc">Antigravity runs its background tasks on Gemini Flash Lite, so expect a Flash
-      Lite model here even if nobody chose one.</p>
+      <p class="desc">Antigravity also uses a lightweight model in the background, so expect Flash
+      Lite here even if nobody chose it.</p>
       <div class="tablewrap" id="tableAgyModels"></div>
     </div>
 
     <div class="card">
       <header><h2>Antigravity clients</h2></header>
-      <p class="desc">Client builds in use, by name and version.</p>
+      <p class="desc">Client names and versions in use.</p>
       <div class="tablewrap" id="tableAgyClients"></div>
     </div>
   </div>

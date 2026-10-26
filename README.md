@@ -174,9 +174,9 @@ database: /path/to/ge-usage-analytics/usage.db
       to be enabled per project; see 'NotebookLM Enterprise' in the README.
 
 [4/4] Cloud Logging: Antigravity requests …
-      0 requests. Antigravity writes this log only once Metadata logging is
-      on in Gemini Enterprise's AI developer tools settings; see
-      'Antigravity' in the README.
+      0 requests. Antigravity logging is off by default; enable
+      Metadata logging in the Gemini Enterprise AI developer tools
+      settings. See 'Antigravity' in the README.
 
 by surface:
   Gemini Enterprise       223 calls     121 user-attributed     2,079,056 tokens
@@ -272,8 +272,8 @@ JavaScript but no network connection to view.
 
 Filter token charts by date range, surface, user, model, or agent. Deep Research
 and its sub-agents share one agent filter. Each chart has a **Table** button for
-viewing the numbers. NotebookLM tables cover the full collected period and are
-not affected by these filters.
+viewing the numbers. NotebookLM and Antigravity tables cover the full collected
+period and are not affected by these filters.
 
 ![Breakdowns by agent and by hour](docs/images/dashboard-breakdowns.png)
 
@@ -514,33 +514,32 @@ these actions to token totals.
 
 ## 13. Antigravity
 
-Antigravity used through a Gemini Enterprise license is served by the
-Business AI Code API (`businessaicode.googleapis.com`), and it writes nothing
-to your project's logs until an admin turns logging on.
+Antigravity used through a Gemini Enterprise license is served by the Business
+AI Code API (`businessaicode.googleapis.com`). It writes nothing to your
+project's logs until an administrator enables logging.
 
-**Turning it on.** In the console: Gemini Enterprise → **Settings** → **AI
-developer tools**, *Compliance* section. There are two settings, both disabled
-by default
+**Turning it on.** In the console, open Gemini Enterprise → **Settings** → **AI
+developer tools**, *Compliance* section. Both settings are disabled by default
 ([documentation](https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools-settings)):
 
 | Setting | What it adds |
 |---|---|
-| Metadata logging | One entry per request: the account, the model and client, token counts. **This is what the tool reads.** |
-| Prompts and responses logging | The prompt, in separate request entries, and the model's output. Not needed, and never stored. |
+| Metadata logging | One entry per request: account, model, client, and token counts. **The collector reads these.** |
+| Prompts and responses logging | Prompts, in separate request entries, and model output. Not needed, and never stored. |
 
-Changing the settings needs `roles/discoveryengine.agentspaceAdmin`; reading
-the log needs only the `roles/logging.viewer` the tool already uses. The
-switch is console-only: the published Discovery Engine API has no field for
-it (checked September 2026). Nothing is recorded retroactively.
+Changing the settings requires `roles/discoveryengine.agentspaceAdmin`; reading
+the log uses `roles/logging.viewer`. The settings are console-only: the
+published Discovery Engine API has no field for them (checked October 2026).
+Only requests made after logging is enabled are recorded.
 
-**What an entry carries.** Each request leaves one `InferenceResponseLog`
-entry in the `businessaicode.googleapis.com/inference_response` log, on
-resource type `businessaicode.googleapis.com/BAICInstance`:
+**What an entry carries.** Each request writes one `InferenceResponseLog` entry
+to the `businessaicode.googleapis.com/inference_response` log, on resource type
+`businessaicode.googleapis.com/BAICInstance`:
 
 | Entry field | Column |
 |---|---|
-| `labels.user_id`, e.g. `user:dana@example.com` | `user_principal`, with the `user:` prefix dropped so it matches the other logs |
-| `labels.model`, `jsonPayload.experience` | `model`, `experience` (the variant served, e.g. `gemini-3.1-pro-high`) |
+| `labels.user_id`, e.g. `user:dana@example.com` | `user_principal`, without the `user:` prefix so it matches the other logs |
+| `labels.model`, `jsonPayload.experience` | `model`, `experience` (the model and thinking level served, e.g. `gemini-3.8-flash-high`) |
 | `labels.model_provider`, e.g. `Google` | `model_provider`; sent by newer clients only |
 | `labels.client_name`, `labels.client_version` | `client_name`, `client_version` |
 | `labels.trajectory_id`, `labels.request_id` | `trajectory_id` (one conversation), `request_id` |
@@ -548,37 +547,40 @@ resource type `businessaicode.googleapis.com/BAICInstance`:
 | `jsonPayload.metadata.cachedContentTokenCount` | `cached_tokens`: the part of the input served from cache, already counted in `input_tokens` (absent when nothing was cached) |
 | `jsonPayload.metadata.candidatesTokenCount` | `output_tokens` |
 | `jsonPayload.metadata.thoughtsTokenCount` | `thinking_tokens` (absent when the model does not think) |
-| `jsonPayload.metadata.totalTokenCount` | `total_tokens`: input, output and thinking added together |
+| `jsonPayload.metadata.totalTokenCount` | `total_tokens`: input, output, and thinking added together |
 | `jsonPayload.metadata.quotaType` | `quota_type`, e.g. `REGULAR_QUOTA`, where present |
 
-Google's documentation describes the settings but not this entry format; the
-field names above were checked against live entries (September 2026). The
-same resource carries two more logs the tool never reads: `inference_request`,
-holding prompts when prompts-and-responses logging is on, and
-`client_telemetry`, holding client events such as `InferenceResolved`.
+Google documents the settings but not this entry format. The fields above were
+checked against live entries from Antigravity CLI 1.2.8 to 1.4.5 (September and
+October 2026). The same resource has two more logs that the collector does not
+read: `inference_request`, which holds prompts when prompts-and-responses
+logging is on, and `client_telemetry`, which holds client events such as
+`InferenceResolved`.
 
-**Its tokens are reported separately.** They come from a different source
-than the Cloud Trace spans, so the tool never adds them to the Gemini
-Enterprise figures: `stats` prints them in their own table and the dashboard
-in its own cards, outside the filter row. Antigravity also runs its
-background tasks on Gemini Flash Lite whichever model the developer picked,
-per the settings documentation, so expect Flash Lite requests that nobody
-chose. Those carry no trajectory id: they count as requests, not
-conversations.
+**Reporting.** These token counts come from a different source than the Cloud
+Trace spans, so they are never added to Gemini Enterprise totals. `stats` prints
+them in a separate table, and the dashboard shows them in separate cards that
+the filters do not apply to. Antigravity also uses lightweight Gemini models in
+the background for context management and summaries, whichever model the
+developer picks. In the log these appear as Flash Lite requests with no
+trajectory ID, so they count as requests but not as conversations.
 
-**Which project to collect.** The entries land in the project whose Gemini
-Enterprise license the client signed in with. A client signed in with a
-personal Google account is served elsewhere and leaves nothing there:
-observed with the Antigravity CLI, whose personal sign-in calls
-`cloudcode-pa.googleapis.com` rather than Business AI Code.
+**Coverage.** Entries land in the project whose Gemini Enterprise license the
+client signed in with. Two other sign-ins leave nothing there, as observed with
+the Antigravity CLI: a personal Google account, which calls
+`cloudcode-pa.googleapis.com`, and Application Default Credentials, which use
+Vertex AI. An administrator can also enable third-party models, which are off
+by default. Their entries have not been checked: the collector stores whatever
+model and provider labels they carry, and token columns stay empty if they
+report tokens under other field names.
 
-`collect` reads the log on every run (a project that never enabled it
-contributes nothing), rows land in `antigravity_requests` keyed by insert id,
-and reporting is per account: the `antigravity_by_user` view, a section in
-`stats`, and dashboard cards for users, models and client versions. Cloud
-Monitoring also carries project-level `businessaicode.googleapis.com/ai_dev_tools/*`
-metrics (calls, tokens, active-user counts) with no per-user identity; the
-tool does not collect them.
+`collect` reads the log on every run; a project without logging enabled
+contributes nothing. Rows land in `antigravity_requests`, keyed by insert ID.
+View them by user in `antigravity_by_user` or `stats`, and by user, model, and
+client version in the dashboard. Cloud Monitoring also has project-level
+`businessaicode.googleapis.com/ai_dev_tools/*` metrics (calls, tokens, tool
+calls, active users) without per-user identity; the collector does not read
+them.
 
 ---
 
@@ -671,9 +673,9 @@ Performance depends on the data and machine. For larger samples, use
   data. See [section 11](#11-attribution-coverage).
 - **NotebookLM.** This demo reports activity only, after logging is enabled.
   See [NotebookLM Enterprise](#12-notebooklm-enterprise).
-- **Antigravity is opt-in.** Nothing exists before Metadata logging is
-  switched on, and only requests from clients signed in against a Gemini
-  Enterprise license are recorded. See [Antigravity](#13-antigravity).
+- **Antigravity.** Requests are recorded only after Metadata logging is
+  enabled, and only for clients signed in with a Gemini Enterprise license.
+  See [Antigravity](#13-antigravity).
 - **Cloud Trace sampling.** If a project samples traces, token counts reflect the
   sampled population. This tool reports what the APIs return.
 
@@ -761,10 +763,10 @@ and views; importing it elsewhere may require adapting SQLite syntax.
 - **Redaction.** `dashboard --redact-queries` removes prompt text from the HTML,
   including its embedded data. User identities remain, and the database is
   unchanged. Review the output before sharing it.
-- **No Antigravity content.** The Antigravity filter matches only the metadata
-  entries, so prompts logged under prompts-and-responses logging are never
-  downloaded. Those metadata entries then also carry the model's output; it is
-  discarded while parsing and never stored.
+- **Antigravity content.** The collector requests only the metadata entries, so
+  it never downloads prompt entries. When prompts-and-responses logging is on,
+  those entries also include model output; the collector discards it without
+  storing it.
 - **Credentials.** The tool keeps access tokens in memory and does not write them
   to the database or dashboard. Tokens come from `gcloud` or
   `GOOGLE_OAUTH_ACCESS_TOKEN`; `gcloud` manages its own stored credentials.
@@ -822,8 +824,9 @@ gcloud logging read 'logName:"notebooklm_enterprise_user_activity"' --limit 5
 Metadata logging is off by default and records nothing retroactively; see
 [Antigravity](#13-antigravity). If it is on, check that the window covers
 usage since then, that you are collecting the project whose license the
-client signed in with, and that the client signed in through Google Cloud
-rather than with a personal account. To confirm entries exist:
+client signed in with, and that the client used its Gemini Enterprise sign-in
+rather than a personal account or Application Default Credentials. To confirm
+entries exist:
 
 ```bash
 gcloud logging read 'resource.type="businessaicode.googleapis.com/BAICInstance"' --limit 5
@@ -864,9 +867,9 @@ not change Google Cloud data.
    entries, producing `notebooklm_activity` rows keyed by insert id. A project
    with logging disabled returns no activity entries.
 
-5. **And a final time** for Antigravity's `InferenceResponseLog` entries,
-   producing `antigravity_requests` rows keyed by insert id. The filter names
-   the payload type, so prompt-bearing request entries are never downloaded.
+5. **A final Cloud Logging query** reads Antigravity's `InferenceResponseLog`
+   entries into `antigravity_requests` rows keyed by insert id. The filter
+   matches the payload type, so prompt entries are never downloaded.
 
 6. **Everything is written with `INSERT OR REPLACE`**, which makes repeated
    runs idempotent. The `usage` view joins model calls to turns on trace id,

@@ -135,13 +135,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
         print(
             f"      {agy_in:,} input ({agy_cached:,} cached) · {agy_out:,} output · "
-            f"{agy_think:,} thinking tokens (reported on their own)"
+            f"{agy_think:,} thinking tokens (reported separately)"
         )
     else:
         print(
-            "      0 requests. Antigravity writes this log only once Metadata logging is\n"
-            "      on in Gemini Enterprise's AI developer tools settings; see\n"
-            "      'Antigravity' in the README."
+            "      0 requests. Antigravity logging is off by default; enable\n"
+            "      Metadata logging in the Gemini Enterprise AI developer tools\n"
+            "      settings. See 'Antigravity' in the README."
         )
 
     store.set_meta(conn, "last_collect_utc", end.strftime("%Y-%m-%dT%H:%M:%SZ"))
@@ -233,7 +233,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             f"{'ANTIGRAVITY USER':<38}{'REQUESTS':>9}{'CONVS':>7}"
             f"{'INPUT':>12}{'CACHED':>12}{'OUTPUT':>10}{'THINKING':>10}{'TOTAL':>12}"
         )
-        print("\nAntigravity — its own log and token counts, never added to Gemini Enterprise figures")
+        print("\nAntigravity — separate log and token counts, not added to Gemini Enterprise totals")
         print(head)
         print("-" * len(head))
         for r in agy:
