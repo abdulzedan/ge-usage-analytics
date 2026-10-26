@@ -192,8 +192,9 @@ def test_stats_stays_quiet_without_notebooklm_data(db, capsys):
 
 _AGY_ROW = {
     "insert_id": "a1", "ts": "2026-07-02T11:00:00", "user_principal": "sam@example.com",
-    "model": "gemini-3.1-pro-preview", "input_tokens": 11500, "output_tokens": 200,
-    "thinking_tokens": 300, "total_tokens": 12000, "trajectory_id": "traj-1",
+    "model": "gemini-3.1-pro-preview", "input_tokens": 11500, "cached_tokens": 9000,
+    "output_tokens": 200, "thinking_tokens": 300, "total_tokens": 12000,
+    "trajectory_id": "traj-1",
 }
 
 
@@ -207,9 +208,9 @@ def test_stats_appends_antigravity_usage_when_present(db, capsys):
 
     assert rc == 0
     assert "Antigravity" in out
-    assert "THINKING" in out
+    assert "CACHED" in out and "THINKING" in out
     line = next(ln for ln in out.splitlines() if ln.startswith("sam@example.com"))
-    assert line.split()[1:] == ["1", "1", "11,500", "200", "300", "12,000"]
+    assert line.split()[1:] == ["1", "1", "11,500", "9,000", "200", "300", "12,000"]
     assert "TOTAL (1 users)" in out  # the Gemini Enterprise table is unchanged
 
 
@@ -422,6 +423,7 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
                 "user_principal": "dana@example.com",
                 "model": "gemini-3.1-pro-preview",
                 "input_tokens": 11500,
+                "cached_tokens": 9000,
                 "output_tokens": 200,
                 "thinking_tokens": 300,
                 "total_tokens": 12000,
@@ -444,7 +446,7 @@ def test_collect_writes_all_sources_and_summarises(tmp_path, monkeypatch, capsys
     assert "1,200 input tokens · 340 output tokens" in out
     assert "1 activities · 1 distinct users (no token data exists)" in out
     assert "1 requests · 1 distinct users · 1 conversations" in out
-    assert "11,500 input · 200 output · 300 thinking tokens" in out
+    assert "11,500 input (9,000 cached) · 200 output · 300 thinking tokens" in out
     assert "Gemini Enterprise" in out
     assert "attributed to a user: 1/1 model calls (100.0%)" in out
     assert "1 via trace id · 0 via session id" in out

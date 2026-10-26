@@ -282,7 +282,9 @@ def parse_antigravity_request(entry: dict[str, Any]) -> dict[str, Any] | None:
 
     The token fields follow the Gemini API's usage metadata: the total is the
     prompt, the response candidates and the thinking tokens added together,
-    and a model that does not think omits `thoughtsTokenCount`.
+    and a model that does not think omits `thoughtsTokenCount`. The cached
+    count is the part of the prompt served from cache, already inside the
+    prompt count, and is omitted when nothing was cached.
     """
     insert_id = entry.get("insertId")
     if not insert_id:
@@ -299,8 +301,11 @@ def parse_antigravity_request(entry: dict[str, Any]) -> dict[str, Any] | None:
         "client_name": labels.get("client_name"),
         "client_version": labels.get("client_version"),
         "model": labels.get("model"),
+        # Only newer clients label the provider.
+        "model_provider": labels.get("model_provider"),
         "experience": payload.get("experience"),
         "input_tokens": _count(metadata, "promptTokenCount"),
+        "cached_tokens": _count(metadata, "cachedContentTokenCount"),
         "output_tokens": _count(metadata, "candidatesTokenCount"),
         "thinking_tokens": _count(metadata, "thoughtsTokenCount"),
         "total_tokens": _count(metadata, "totalTokenCount"),

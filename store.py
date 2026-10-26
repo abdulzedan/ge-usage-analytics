@@ -85,8 +85,10 @@ CREATE TABLE IF NOT EXISTS antigravity_requests (
     client_name     TEXT,
     client_version  TEXT,
     model           TEXT,
+    model_provider  TEXT,
     experience      TEXT,
     input_tokens    INTEGER,
+    cached_tokens   INTEGER,
     output_tokens   INTEGER,
     thinking_tokens INTEGER,
     total_tokens    INTEGER,
@@ -239,6 +241,7 @@ GROUP BY user_principal;
 -- Antigravity's token counts come from its own log, never from the spans
 -- behind the views above, and are never added to them. Its total also
 -- counts thinking tokens, which it reports as a figure of their own.
+-- Cached tokens are the part of the input served from cache, not extra.
 DROP VIEW IF EXISTS antigravity_by_user;
 CREATE VIEW antigravity_by_user AS
 SELECT
@@ -247,6 +250,7 @@ SELECT
     COUNT(DISTINCT trajectory_id)         AS conversations,
     COUNT(DISTINCT substr(ts, 1, 10))     AS active_days,
     COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+    COALESCE(SUM(cached_tokens), 0)       AS cached_tokens,
     COALESCE(SUM(output_tokens), 0)       AS output_tokens,
     COALESCE(SUM(thinking_tokens), 0)     AS thinking_tokens,
     COALESCE(SUM(total_tokens), 0)        AS total_tokens,

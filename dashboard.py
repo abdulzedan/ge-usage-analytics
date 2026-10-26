@@ -812,16 +812,19 @@ if (DATA.antigravity.length) {
     ["Requests", num(t.requests)],
     ["Conversations", num(t.conversations)],
     ["Total tokens", num(t.tokens)],
-    ["Input tokens", num(t.input)],
+    ["Input tokens", num(t.input),
+     t.cached && t.input ? `${num(t.cached)} cached (${Math.round(t.cached / t.input * 100)}%)` : ""],
     ["Output tokens", num(t.output)],
     ["Thinking tokens", num(t.thinking)],
-  ].map(([l, v]) => `<div class="tile"><div class="label">${esc(l)}</div>`
-    + `<div class="value">${esc(v)}</div></div>`).join("");
+  ].map(([l, v, sub]) => `<div class="tile"><div class="label">${esc(l)}</div>`
+    + `<div class="value">${esc(v)}</div>`
+    + (sub ? `<div class="sub">${esc(sub)}</div>` : "") + `</div>`).join("");
   renderTable("tableAgy", [
     { label: "User", get: (r) => r.u },
     { label: "Requests", num: true, get: (r) => num(r.n) },
     { label: "Conversations", num: true, get: (r) => num(r.c) },
     { label: "Input", num: true, get: (r) => num(r.i) },
+    { label: "Cached", num: true, get: (r) => num(r.ca) },
     { label: "Output", num: true, get: (r) => num(r.o) },
     { label: "Thinking", num: true, get: (r) => num(r.th) },
     { label: "Total", num: true, get: (r) => num(r.k) },
@@ -832,6 +835,7 @@ if (DATA.antigravity.length) {
   $("gridAgy").classList.remove("hidden");
   renderTable("tableAgyModels", [
     { label: "Model", get: (r) => r.m || "(unknown)" },
+    { label: "Provider", get: (r) => r.p || "—" },
     { label: "Requests", num: true, get: (r) => num(r.n) },
     { label: "Users", num: true, get: (r) => num(r.u) },
     { label: "Tokens", num: true, get: (r) => num(r.k) },
@@ -965,6 +969,7 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             "n": r["requests"],
             "c": r["conversations"],
             "i": r["input_tokens"],
+            "ca": r["cached_tokens"],
             "o": r["output_tokens"],
             "th": r["thinking_tokens"],
             "k": r["total_tokens"],
@@ -977,16 +982,19 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
     totals = conn.execute(
         "SELECT COUNT(*) n, COUNT(DISTINCT user_principal) u,"
         " COUNT(DISTINCT trajectory_id) c,"
-        " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(output_tokens), 0) o,"
+        " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(cached_tokens), 0) ca,"
+        " COALESCE(SUM(output_tokens), 0) o,"
         " COALESCE(SUM(thinking_tokens), 0) th, COALESCE(SUM(total_tokens), 0) k"
         " FROM antigravity_requests"
     ).fetchone()
 
+    # Older clients send no provider label, so a model's rows can disagree;
+    # MAX keeps whichever provider was reported.
     antigravity_models = [
-        {"m": r["model"], "n": r["n"], "u": r["u"], "k": r["k"]}
+        {"m": r["model"], "p": r["p"], "n": r["n"], "u": r["u"], "k": r["k"]}
         for r in conn.execute(
-            "SELECT model, COUNT(*) n, COUNT(DISTINCT user_principal) u,"
-            " COALESCE(SUM(total_tokens), 0) k"
+            "SELECT model, MAX(model_provider) p, COUNT(*) n,"
+            " COUNT(DISTINCT user_principal) u, COALESCE(SUM(total_tokens), 0) k"
             " FROM antigravity_requests GROUP BY model ORDER BY k DESC"
         )
     ]
@@ -1011,6 +1019,7 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             "users": totals["u"],
             "conversations": totals["c"],
             "input": totals["i"],
+            "cached": totals["ca"],
             "output": totals["o"],
             "thinking": totals["th"],
             "tokens": totals["k"],

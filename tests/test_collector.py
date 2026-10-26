@@ -301,7 +301,7 @@ def test_build_antigravity_log_filter_selects_the_response_log_only():
 
 
 def _antigravity_entry(**overrides):
-    """Shaped like a live InferenceResponseLog entry (September 2026)."""
+    """Shaped like a live InferenceResponseLog entry (October 2026, client 1.4.5)."""
     entry = {
         "insertId": "agy-1",
         "timestamp": "2026-07-01T09:30:00.123456789Z",
@@ -313,8 +313,9 @@ def _antigravity_entry(**overrides):
         },
         "labels": {
             "client_name": "antigravity_cli",
-            "client_version": "1.2.8",
+            "client_version": "1.4.5",
             "model": "gemini-3.1-pro-preview",
+            "model_provider": "Google",
             "request_id": "traj-1-0",
             "trajectory_id": "traj-1",
             "user_id": "user:dana@example.com",
@@ -324,6 +325,7 @@ def _antigravity_entry(**overrides):
             "experience": "gemini-3.1-pro-high",
             "metadata": {
                 "promptTokenCount": "12534",
+                "cachedContentTokenCount": "7388",
                 "candidatesTokenCount": "19",
                 "thoughtsTokenCount": "274",
                 "totalTokenCount": "12827",
@@ -342,11 +344,14 @@ def test_parse_antigravity_request_extracts_user_model_and_tokens():
         "ts": "2026-07-01T09:30:00",
         "user_principal": "dana@example.com",  # the IAM member prefix is dropped
         "client_name": "antigravity_cli",
-        "client_version": "1.2.8",
+        "client_version": "1.4.5",
         "model": "gemini-3.1-pro-preview",
+        "model_provider": "Google",
         "experience": "gemini-3.1-pro-high",
-        # int64 strings on the wire; the total is the three parts added up
+        # int64 strings on the wire; the total is the three parts added up,
+        # and the cached tokens are a part of the input, not a fourth
         "input_tokens": 12534,
+        "cached_tokens": 7388,
         "output_tokens": 19,
         "thinking_tokens": 274,
         "total_tokens": 12827,
@@ -369,8 +374,22 @@ def test_parse_antigravity_request_handles_a_background_task():
 
     assert row["trajectory_id"] is None  # not a conversation of its own
     assert row["thinking_tokens"] is None
+    assert row["cached_tokens"] is None
     assert (row["input_tokens"], row["output_tokens"], row["total_tokens"]) == (91, 3, 94)
     assert row["quota_type"] is None
+
+
+def test_parse_antigravity_request_handles_an_older_client():
+    """Older clients send no provider label, and nothing cached omits the count."""
+    entry = _antigravity_entry()
+    entry["labels"]["client_version"] = "1.2.14"
+    del entry["labels"]["model_provider"]
+    del entry["jsonPayload"]["metadata"]["cachedContentTokenCount"]
+    row = collector.parse_antigravity_request(entry)
+
+    assert row["model_provider"] is None
+    assert row["cached_tokens"] is None
+    assert row["input_tokens"] == 12534
 
 
 def test_parse_antigravity_request_leaves_a_bare_account_alone():
@@ -406,9 +425,10 @@ def test_parse_antigravity_request_tolerates_a_sparse_payload():
     assert row["insert_id"] == "x"
     assert row["user_principal"] is None
     assert row["model"] is None
+    assert row["model_provider"] is None
     assert row["trajectory_id"] is None
     assert (row["input_tokens"], row["output_tokens"], row["thinking_tokens"]) == (None,) * 3
-    assert row["total_tokens"] is None
+    assert (row["cached_tokens"], row["total_tokens"]) == (None, None)
 
 
 def test_collect_antigravity_requests_windows_dedupes_and_keeps_anonymous_tokens():

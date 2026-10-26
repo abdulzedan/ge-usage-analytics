@@ -125,17 +125,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
     agy_users = {r["user_principal"] for r in agy if r.get("user_principal")}
     agy_convs = {r["trajectory_id"] for r in agy if r.get("trajectory_id")}
     if n_agy:
-        agy_in, agy_out, agy_think = (
+        agy_in, agy_cached, agy_out, agy_think = (
             sum(r.get(k) or 0 for r in agy)
-            for k in ("input_tokens", "output_tokens", "thinking_tokens")
+            for k in ("input_tokens", "cached_tokens", "output_tokens", "thinking_tokens")
         )
         print(
             f"      {n_agy:,} requests · {len(agy_users)} distinct users · "
             f"{len(agy_convs):,} conversations"
         )
         print(
-            f"      {agy_in:,} input · {agy_out:,} output · {agy_think:,} thinking tokens"
-            " (reported on their own)"
+            f"      {agy_in:,} input ({agy_cached:,} cached) · {agy_out:,} output · "
+            f"{agy_think:,} thinking tokens (reported on their own)"
         )
     else:
         print(
@@ -231,7 +231,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
     if agy:
         head = (
             f"{'ANTIGRAVITY USER':<38}{'REQUESTS':>9}{'CONVS':>7}"
-            f"{'INPUT':>12}{'OUTPUT':>10}{'THINKING':>10}{'TOTAL':>12}"
+            f"{'INPUT':>12}{'CACHED':>12}{'OUTPUT':>10}{'THINKING':>10}{'TOTAL':>12}"
         )
         print("\nAntigravity — its own log and token counts, never added to Gemini Enterprise figures")
         print(head)
@@ -240,7 +240,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             user = (r["user_principal"] or "")[:37]
             print(
                 f"{user:<38}{r['requests']:>9,}{r['conversations']:>7,}"
-                f"{r['input_tokens']:>12,}{r['output_tokens']:>10,}"
+                f"{r['input_tokens']:>12,}{r['cached_tokens']:>12,}{r['output_tokens']:>10,}"
                 f"{r['thinking_tokens']:>10,}{r['total_tokens']:>12,}"
             )
     conn.close()

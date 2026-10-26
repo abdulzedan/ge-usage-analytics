@@ -361,12 +361,13 @@ def test_notebooklm_activity_round_trip_and_rollup(conn):
     assert summary["last_seen"] == "2026-07-02T10:00:00"
 
 
-def _agy(insert_id, ts, user, model, tokens, trajectory):
+def _agy(insert_id, ts, user, model, tokens, trajectory, cached=None):
     """One antigravity_requests row; `tokens` is (input, output, thinking)."""
     i, o, th = tokens
     return {"insert_id": insert_id, "ts": ts, "user_principal": user, "model": model,
-            "input_tokens": i, "output_tokens": o, "thinking_tokens": th,
-            "total_tokens": i + o + (th or 0), "trajectory_id": trajectory}
+            "input_tokens": i, "cached_tokens": cached, "output_tokens": o,
+            "thinking_tokens": th, "total_tokens": i + o + (th or 0),
+            "trajectory_id": trajectory}
 
 
 def test_antigravity_requests_round_trip_and_rollup(conn):
@@ -375,9 +376,9 @@ def test_antigravity_requests_round_trip_and_rollup(conn):
         _agy("a1", "2026-07-01T09:00:00", "dana@example.com", "gemini-3.5-flash-lite",
              (91, 3, None), None),
         _agy("a2", "2026-07-01T09:00:30", "dana@example.com", "gemini-3.1-pro-preview",
-             (12534, 19, 274), "traj-1"),
+             (12534, 19, 274), "traj-1", cached=7388),
         _agy("a3", "2026-07-03T14:00:00", "dana@example.com", "gemini-3.1-pro-preview",
-             (9000, 100, 300), "traj-2"),
+             (9000, 100, 300), "traj-2", cached=3600),
         _agy("a4", "2026-07-03T15:00:00", None, "gemini-3.1-pro-preview",
              (400, 50, 50), "traj-3"),
     ]
@@ -392,6 +393,7 @@ def test_antigravity_requests_round_trip_and_rollup(conn):
     assert dana["conversations"] == 2  # the background task belongs to none
     assert dana["active_days"] == 2
     assert dana["input_tokens"] == 21625
+    assert dana["cached_tokens"] == 10988  # part of the input, so not in the total twice
     assert dana["output_tokens"] == 122
     assert dana["thinking_tokens"] == 574
     assert dana["total_tokens"] == 22321
@@ -410,6 +412,7 @@ def test_antigravity_rollup_reports_zero_rather_than_null_thinking(conn):
     )
     row = conn.execute("SELECT * FROM antigravity_by_user").fetchone()
     assert row["thinking_tokens"] == 0
+    assert row["cached_tokens"] == 0
     assert row["conversations"] == 0
 
 

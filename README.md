@@ -541,9 +541,11 @@ resource type `businessaicode.googleapis.com/BAICInstance`:
 |---|---|
 | `labels.user_id`, e.g. `user:dana@example.com` | `user_principal`, with the `user:` prefix dropped so it matches the other logs |
 | `labels.model`, `jsonPayload.experience` | `model`, `experience` (the variant served, e.g. `gemini-3.1-pro-high`) |
+| `labels.model_provider`, e.g. `Google` | `model_provider`; sent by newer clients only |
 | `labels.client_name`, `labels.client_version` | `client_name`, `client_version` |
 | `labels.trajectory_id`, `labels.request_id` | `trajectory_id` (one conversation), `request_id` |
 | `jsonPayload.metadata.promptTokenCount` | `input_tokens` |
+| `jsonPayload.metadata.cachedContentTokenCount` | `cached_tokens`: the part of the input served from cache, already counted in `input_tokens` (absent when nothing was cached) |
 | `jsonPayload.metadata.candidatesTokenCount` | `output_tokens` |
 | `jsonPayload.metadata.thoughtsTokenCount` | `thinking_tokens` (absent when the model does not think) |
 | `jsonPayload.metadata.totalTokenCount` | `total_tokens`: input, output and thinking added together |
@@ -630,7 +632,8 @@ seen. This view reports activity counts only.
 ### View: `antigravity_by_user`
 
 Per account: requests, conversations (distinct trajectory ids), active days,
-input, output, thinking and total tokens, first and last seen. Requests with
+input tokens and the cached part of them, output, thinking and total tokens,
+first and last seen. Requests with
 no account group under `(unattributed)`. Never combined with the Gemini
 Enterprise token views.
 
