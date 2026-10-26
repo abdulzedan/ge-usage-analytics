@@ -289,6 +289,17 @@ _TEMPLATE = r"""<!doctype html>
     <div class="tablewrap" id="tableAgy"></div>
   </div>
 
+  <div class="card hidden" id="cardAgyDaily">
+    <header>
+      <h2>Antigravity tokens per day</h2>
+      <button class="ghost toggle" type="button" data-view="agyDaily">Table</button>
+    </header>
+    <p class="desc">Daily Antigravity tokens for the full collected period. Hover a column for details.</p>
+    <div class="legend" id="legendAgyDaily"></div>
+    <div class="plot" id="plotAgyDaily"></div>
+    <div class="tablewrap hidden" id="tableAgyDaily"></div>
+  </div>
+
   <div class="grid2 hidden" id="gridAgy">
     <div class="card">
       <header><h2>Antigravity by model</h2></header>
@@ -434,8 +445,8 @@ function groupSum(rows, keyFn) {
 /* ---------------- charts ---------------- */
 
 /* Stacked columns over time. Two series -> legend + categorical slots 1 and 2. */
-function drawDaily(rows) {
-  const host = $("plotDaily");
+function drawDaily(rows, hostId = "plotDaily", names = ["Input", "Output"]) {
+  const host = $(hostId);
   host.innerHTML = "";
   const byDay = new Map();
   for (const r of rows) {
@@ -480,7 +491,7 @@ function drawDaily(rows) {
     const yTop = padT + plotH - hTotal;
 
     const html = `<div class="tt-title">${esc(d.key)}</div>`
-      + ttRow(c2, "Output", num(d.output)) + ttRow(c1, "Input", num(d.input))
+      + ttRow(c2, names[1], num(d.output)) + ttRow(c1, names[0], num(d.input))
       + ttRow(null, "Total", num(total));
 
     if (d.output > 0) {                                     // outermost -> rounded cap
@@ -517,6 +528,16 @@ function drawDaily(rows) {
     svg.appendChild(lab);
   }
   host.appendChild(svg);
+}
+
+/* Antigravity's daily totals ignore the filter row, but the chart is redrawn
+   with the others on resize and theme change. */
+function drawAgyDaily() {
+  if (!DATA.antigravityDaily.length) return;
+  legend("legendAgyDaily", [{ color: css("--series-1"), label: "Input tokens" },
+                            { color: css("--series-2"), label: "Output and thinking tokens" }]);
+  drawDaily(DATA.antigravityDaily.map((d) => ({ t: d.d, i: d.i, o: d.o + d.th })),
+            "plotAgyDaily", ["Input", "Output + thinking"]);
 }
 
 /* Horizontal stacked bars. Two series -> legend + slots 1 and 2. */
@@ -761,6 +782,8 @@ function render() {
     { label: "Prompt", html: true,
       get: (r) => `<span class="q" title="${esc(DATA.queries[r.trace] || "")}">${esc(DATA.queries[r.trace] || "—")}</span>` },
   ], recent);
+
+  drawAgyDaily();
 }
 
 /* ---------------- wiring ---------------- */
@@ -831,6 +854,18 @@ if (DATA.antigravity.length) {
     { label: "Active days", num: true, get: (r) => num(r.d) },
     { label: "Last seen (UTC)", get: (r) => (r.l || "").replace("T", " ") },
   ], DATA.antigravity);
+
+  $("cardAgyDaily").classList.remove("hidden");
+  renderTable("tableAgyDaily", [
+    { label: "Day", get: (r) => r.d },
+    { label: "Requests", num: true, get: (r) => num(r.n) },
+    { label: "Users", num: true, get: (r) => num(r.u) },
+    { label: "Input", num: true, get: (r) => num(r.i) },
+    { label: "Cached", num: true, get: (r) => num(r.ca) },
+    { label: "Output", num: true, get: (r) => num(r.o) },
+    { label: "Thinking", num: true, get: (r) => num(r.th) },
+    { label: "Total", num: true, get: (r) => num(r.k) },
+  ], DATA.antigravityDaily);
 
   $("gridAgy").classList.remove("hidden");
   renderTable("tableAgyModels", [
@@ -988,6 +1023,18 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
         " FROM antigravity_requests"
     ).fetchone()
 
+    antigravity_daily = [
+        {"d": r["d"], "n": r["n"], "u": r["u"], "i": r["i"], "ca": r["ca"],
+         "o": r["o"], "th": r["th"], "k": r["k"]}
+        for r in conn.execute(
+            "SELECT substr(ts, 1, 10) d, COUNT(*) n, COUNT(DISTINCT user_principal) u,"
+            " COALESCE(SUM(input_tokens), 0) i, COALESCE(SUM(cached_tokens), 0) ca,"
+            " COALESCE(SUM(output_tokens), 0) o, COALESCE(SUM(thinking_tokens), 0) th,"
+            " COALESCE(SUM(total_tokens), 0) k"
+            " FROM antigravity_requests WHERE ts IS NOT NULL GROUP BY 1 ORDER BY 1"
+        )
+    ]
+
     # Older clients send no provider label, so a model's rows can disagree;
     # MAX keeps whichever provider was reported.
     antigravity_models = [
@@ -1024,6 +1071,7 @@ def _rows_payload(conn: sqlite3.Connection, redact: bool) -> dict[str, Any]:
             "thinking": totals["th"],
             "tokens": totals["k"],
         },
+        "antigravityDaily": antigravity_daily,
         "antigravityModels": antigravity_models,
         "antigravityClients": antigravity_clients,
     }

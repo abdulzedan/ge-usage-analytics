@@ -226,6 +226,10 @@ def test_antigravity_rollups_are_embedded_and_counted(conn):
         "requests": 3, "users": 1, "conversations": 1,
         "input": 13625, "cached": 7988, "output": 32, "thinking": 364, "tokens": 14021,
     }
+    assert payload["antigravityDaily"] == [
+        {"d": "2026-07-01", "n": 3, "u": 1, "i": 13625, "ca": 7988,
+         "o": 32, "th": 364, "k": 14021},
+    ]
     # One row per model, whichever client versions reported it.
     assert [(m["m"], m["p"]) for m in payload["antigravityModels"]] == [
         ("gemini-3.1-pro-preview", "Google"), ("gemini-3.5-flash-lite", None),
@@ -245,6 +249,7 @@ def test_without_antigravity_data_the_payload_and_subtitle_stay_quiet(conn):
     payload = _payload(html)
 
     assert payload["antigravity"] == []
+    assert payload["antigravityDaily"] == []
     assert payload["antigravityModels"] == []
     assert payload["antigravityClients"] == []
     assert payload["antigravityTotals"]["requests"] == 0

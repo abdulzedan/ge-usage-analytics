@@ -258,6 +258,22 @@ SELECT
     MAX(ts)                               AS last_seen
 FROM antigravity_requests
 GROUP BY 1;
+
+-- One row per account per UTC day; sum across accounts for daily totals.
+DROP VIEW IF EXISTS antigravity_by_day;
+CREATE VIEW antigravity_by_day AS
+SELECT
+    substr(ts, 1, 10)                          AS day,
+    COALESCE(user_principal, '(unattributed)') AS user_principal,
+    COUNT(*)                                   AS requests,
+    COUNT(DISTINCT trajectory_id)              AS conversations,
+    COALESCE(SUM(input_tokens), 0)             AS input_tokens,
+    COALESCE(SUM(cached_tokens), 0)            AS cached_tokens,
+    COALESCE(SUM(output_tokens), 0)            AS output_tokens,
+    COALESCE(SUM(thinking_tokens), 0)          AS thinking_tokens,
+    COALESCE(SUM(total_tokens), 0)             AS total_tokens
+FROM antigravity_requests
+GROUP BY 1, 2;
 """
 
 

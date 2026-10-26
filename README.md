@@ -272,8 +272,8 @@ JavaScript but no network connection to view.
 
 Filter token charts by date range, surface, user, model, or agent. Deep Research
 and its sub-agents share one agent filter. Each chart has a **Table** button for
-viewing the numbers. NotebookLM and Antigravity tables cover the full collected
-period and are not affected by these filters.
+viewing the numbers. NotebookLM and Antigravity sections cover the full
+collected period and are not affected by these filters.
 
 ![Breakdowns by agent and by hour](docs/images/dashboard-breakdowns.png)
 
@@ -322,6 +322,14 @@ FROM usage
 WHERE user_principal = 'user@example.com'
 GROUP BY 1
 ORDER BY 1;
+```
+
+```sql
+-- Antigravity daily trend for one account
+SELECT day, requests, cached_tokens, total_tokens
+FROM antigravity_by_day
+WHERE user_principal = 'user@example.com'
+ORDER BY day;
 ```
 
 ```sql
@@ -576,8 +584,9 @@ report tokens under other field names.
 
 `collect` reads the log on every run; a project without logging enabled
 contributes nothing. Rows land in `antigravity_requests`, keyed by insert ID.
-View them by user in `antigravity_by_user` or `stats`, and by user, model, and
-client version in the dashboard. Cloud Monitoring also has project-level
+View them by user in `antigravity_by_user` or `stats`, by user and day in
+`antigravity_by_day`, and by user, day, model, and client version in the
+dashboard. Cloud Monitoring also has project-level
 `businessaicode.googleapis.com/ai_dev_tools/*` metrics (calls, tokens, tool
 calls, active users) without per-user identity; the collector does not read
 them.
@@ -586,7 +595,7 @@ them.
 
 ## 14. Data model
 
-Five activity tables and five reporting views, plus a metadata table.
+Five activity tables and six reporting views, plus a metadata table.
 
 | Table | Each row represents | Source |
 |---|---|---|
@@ -635,9 +644,14 @@ seen. This view reports activity counts only.
 
 Per account: requests, conversations (distinct trajectory ids), active days,
 input tokens and the cached part of them, output, thinking and total tokens,
-first and last seen. Requests with
-no account group under `(unattributed)`. Never combined with the Gemini
-Enterprise token views.
+first and last seen. Requests with no account group under `(unattributed)`.
+Never combined with the Gemini Enterprise token views.
+
+### View: `antigravity_by_day`
+
+One row per account per UTC day, with the same request, conversation, and token
+columns. Sum across accounts for daily totals. A conversation that crosses
+midnight counts on both days.
 
 All timestamps are **UTC**.
 

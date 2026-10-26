@@ -28,6 +28,7 @@ def test_connect_creates_tables_and_views(conn):
     } <= _names(conn, "table")
     assert {
         "usage", "usage_by_user", "usage_by_agent", "notebooklm_by_user", "antigravity_by_user",
+        "antigravity_by_day",
     } <= _names(conn, "view")
 
 
@@ -414,6 +415,41 @@ def test_antigravity_rollup_reports_zero_rather_than_null_thinking(conn):
     assert row["thinking_tokens"] == 0
     assert row["cached_tokens"] == 0
     assert row["conversations"] == 0
+
+
+def test_antigravity_by_day_splits_each_account_by_utc_day(conn):
+    store.upsert_antigravity_requests(
+        conn,
+        [
+            _agy("a1", "2026-07-01T09:00:00", "dana@example.com", "gemini-3.5-flash-lite",
+                 (91, 3, None), None),
+            _agy("a2", "2026-07-01T23:59:59", "dana@example.com", "gemini-3.1-pro-preview",
+                 (12534, 19, 274), "traj-1", cached=7388),
+            _agy("a3", "2026-07-02T00:00:01", "dana@example.com", "gemini-3.1-pro-preview",
+                 (9000, 100, 300), "traj-1", cached=3600),
+            _agy("a4", "2026-07-02T10:00:00", None, "gemini-3.1-pro-preview",
+                 (400, 50, 50), "traj-2"),
+        ],
+    )
+    rows = {
+        (r["day"], r["user_principal"]): r
+        for r in conn.execute("SELECT * FROM antigravity_by_day")
+    }
+    assert sorted(rows) == [
+        ("2026-07-01", "dana@example.com"),
+        ("2026-07-02", "(unattributed)"),
+        ("2026-07-02", "dana@example.com"),
+    ]
+
+    first = rows[("2026-07-01", "dana@example.com")]
+    assert (first["requests"], first["conversations"]) == (2, 1)
+    assert (first["input_tokens"], first["cached_tokens"]) == (12625, 7388)
+    assert (first["output_tokens"], first["thinking_tokens"], first["total_tokens"]) == (
+        22, 274, 12921,
+    )
+    # A conversation that crosses midnight counts on both days.
+    assert rows[("2026-07-02", "dana@example.com")]["conversations"] == 1
+    assert rows[("2026-07-02", "(unattributed)")]["total_tokens"] == 500
 
 
 def test_antigravity_tokens_never_reach_the_usage_views(conn):
